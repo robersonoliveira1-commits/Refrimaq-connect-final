@@ -156,7 +156,7 @@ async function startServer() {
       }
     }));
 
-    app.get('/*', (req, res) => {
+    app.get(/.*/, (req, res) => {
       // If a static asset (js, css, png, etc.) is missing, return 404 instead of index.html
       if (req.path.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json)$/)) {
         return res.status(404).end();

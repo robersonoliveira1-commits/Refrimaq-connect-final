@@ -1,0 +1,68 @@
+# Manual do Sistema - RefrimaqConnect
+
+Este documento descreve todos os módulos, fluxos e integrações do sistema RefrimaqConnect. Ele pode ser usado como base para criação de manuais de usuário e treinamentos.
+
+## 1. Visão Geral (Dashboard)
+O Dashboard é a tela inicial do sistema. Ele fornece um panorama rápido da saúde do negócio:
+- **Métricas Principais:** Resumo de Ordens de Serviço (OS) ativas, faturamento previsto e status de aprovações.
+- **Atalhos:** Acesso rápido às funcionalidades mais utilizadas, como criar nova OS ou acessar o PDV.
+
+## 2. Clientes
+Módulo responsável pelo cadastro e gestão da base de clientes.
+- **Cadastro:** Armazenamento de dados pessoais/documentos, endereço e informações de contato.
+- **Histórico:** Permite consultar rapidamente o histórico de serviços vinculados a cada cliente.
+
+## 3. Ordens de Serviço (OS)
+O coração do sistema técnico. Controla todo o ciclo de vida do conserto de um equipamento.
+- **Abertura:** Registro do cliente, equipamento, defeito relatado e observações.
+- **Status da OS:** O fluxo passa por várias etapas: Aberta, Em Orçamento, Aguardando Peça, Aprovada, Recusada, Concluída, Entregue.
+- **Laudo Técnico:** Registro de fotos do equipamento (antes/depois) e descrição técnica do problema.
+- **Peças e Mão de Obra:** Inclusão das peças necessárias (puxadas do Estoque) e valor da mão de obra.
+- **Integração com Estoque:** Ao aprovar e finalizar a OS, o sistema **dá baixa automaticamente** nas peças utilizadas, registrando no histórico de movimentações.
+- **Integração Financeira:** Após finalizada, a OS gera automaticamente uma receita (Entrada) no módulo Financeiro (Contas a Receber e Fluxo de Caixa).
+
+## 4. Estoque (Peças e Serviços)
+Controle rigoroso dos insumos da oficina.
+- **Cadastro de Peças:** Inserção de produtos com preço de custo, margem de lucro e preço de venda.
+- **Movimentações Manuais:** Possibilidade de dar Entrada (Compras) ou Saída (Uso avulso, Perda, Quebra, Roubo).
+- **Integração Financeira das Movimentações:**
+  - Quando uma peça é **comprada** para o estoque, o sistema gera automaticamente uma **Despesa** no Contas a Pagar.
+  - Quando uma peça sofre **Perda, Quebra ou Roubo**, também é gerada uma despesa/prejuízo no financeiro, garantindo rastreabilidade contábil total.
+- **Rastreabilidade:** O histórico detalhado exibe exatamente o motivo de cada alteração de quantidade.
+
+## 5. Ponto de Venda (PDV)
+Módulo para venda de peças balcão, sem necessidade de atrelar a uma OS.
+- **Venda Rápida:** Adição de itens ao carrinho e finalização de compra.
+- **Baixa de Estoque:** Assim como a OS, a venda no PDV desconta as peças do estoque instantaneamente.
+- **Geração de Receita:** O valor da venda é contabilizado nas Entradas do Fluxo de Caixa.
+
+## 6. Venda de Usados
+Módulo focado na compra, reforma e revenda de equipamentos usados (ex: geladeiras, máquinas de lavar reformadas).
+- Cadastro de equipamentos disponíveis.
+- Venda direta com registro automático de receita no módulo financeiro.
+
+## 7. Financeiro (Controle Avançado)
+O módulo financeiro concentra todas as movimentações e garante que o fluxo de caixa bata perfeitamente no final do mês.
+
+### 7.1. Contas a Pagar
+- **Controle de Despesas:** Registro de contas de luz, água, salários, compra de ferramentas e insumos.
+- **Parcelamento:** Ao criar uma despesa, é possível dividi-la em várias parcelas. O sistema gera automaticamente os boletos projetados para os meses seguintes.
+- **Resumos Dinâmicos:** Cards superiores mostram o **Total de Dívidas (Geral)** e o **Total de Dívidas do Mês selecionado**.
+- **Filtro Mensal:** Um calendário permite consultar dívidas passadas ou futuras facilmente.
+- **Baixa:** Marcar uma despesa como 'Paga' a transfere automaticamente para o extrato do Fluxo de Caixa como uma Saída realizada.
+
+### 7.2. Contas a Receber
+- Reúne os pagamentos pendentes de clientes (OS não pagas, parcelamentos de clientes, etc).
+
+### 7.3. Fluxo de Caixa e Extrato Detalhado
+- **Indicadores:** Resumo de todas as Entradas, Saídas e o Saldo líquido do negócio.
+- **Comparativo Mensal:** Gráfico de barras comparando receitas e despesas dos últimos 6 meses.
+- **Extrato Detalhado:** Lista cronológica exata de toda movimentação real (dinheiro que já entrou ou saiu).
+- **Filtros do Extrato:** Abas rápidas para ver 'Todos', apenas 'Entradas' ou apenas 'Saídas'.
+- **Exportação:** Botão para baixar todo o extrato em planilha CSV (compatível com Excel) com base no filtro selecionado, excelente para envio ao contador.
+
+### 7.4. Desempenho Técnico
+- Relatórios gerenciais e acompanhamento de produtividade dos técnicos.
+
+---
+*Fim do Documento.*

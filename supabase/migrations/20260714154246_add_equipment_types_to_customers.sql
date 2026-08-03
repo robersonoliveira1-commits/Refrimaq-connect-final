@@ -1,0 +1,1 @@
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS equipment_types TEXT[] DEFAULT '{}';

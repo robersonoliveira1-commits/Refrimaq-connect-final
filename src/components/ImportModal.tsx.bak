@@ -1,0 +1,370 @@
+import { useState, useRef } from 'react';
+import { X, Upload, AlertCircle, CheckCircle, Download } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+
+interface ImportModalProps {
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+interface ColumnMap {
+  name: string;
+  phone: string;
+  whatsapp: string;
+  email: string;
+  address: string;
+  city: string;
+  state: string;
+  document: string;
+  notes: string;
+}
+
+const FIELD_LABELS: Record<keyof ColumnMap, string> = {
+  name: 'Nome *',
+  phone: 'Telefone',
+  whatsapp: 'WhatsApp',
+  email: 'E-mail',
+  address: 'Endereço',
+  city: 'Cidade',
+  state: 'Estado',
+  document: 'CPF/CNPJ',
+  notes: 'Observações',
+};
+
+const FIELD_KEYS = Object.keys(FIELD_LABELS) as Array<keyof ColumnMap>;
+
+function parseCSV(text: string): string[][] {
+  const lines = text.trim().split(/\r?\n/);
+  return lines.map(row => {
+    const cols: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      if (ch === '"') {
+        if (inQuotes && row[i + 1] === '"') {
+          // escaped quote ""
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+      if ((ch === ',' || ch === ';' || ch === '\t') && !inQuotes) {
+        cols.push(current.trim());
+        current = '';
+        continue;
+      }
+      current += ch;
+    }
+    cols.push(current.trim());
+    return cols;
+  }).filter(row => row.some(cell => cell !== ''));
+}
+
+export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
+  const [step, setStep] = useState<'upload' | 'map' | 'preview' | 'done'>('upload');
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [rows, setRows] = useState<string[][]>([]);
+  const [columnMap, setColumnMap] = useState<ColumnMap>({
+    name: '', phone: '', whatsapp: '', email: '',
+    address: '', city: '', state: '', document: '', notes: '',
+  });
+  const [importing, setImporting] = useState(false);
+  const [importCount, setImportCount] = useState(0);
+  const [errors, setErrors] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text = ev.target?.result as string;
+      const parsed = parseCSV(text);
+      if (parsed.length < 2) return;
+
+      const headerRow = parsed[0];
+      const dataRows = parsed.slice(1);
+
+      setHeaders(headerRow);
+      setRows(dataRows);
+
+      // auto-map common column names
+      const auto: ColumnMap = { name: '', phone: '', whatsapp: '', email: '', address: '', city: '', state: '', document: '', notes: '' };
+      const mappingRules: Record<keyof ColumnMap, RegExp> = {
+        name: /nome|name|razão|razao|empresa/i,
+        phone: /telefone|phone|tel\b|fone|celular/i,
+        whatsapp: /whatsapp|wapp|whats/i,
+        email: /email|e-mail|correo/i,
+        address: /endere[cç]o|address|rua|logradouro/i,
+        city: /cidade|city|munic[ií]pio/i,
+        state: /estado|state|uf\b|est\b/i,
+        document: /cpf|cnpj|doc|documento|cnpj/i,
+        notes: /obs|nota|note|observa[cç][aã]|coment/i,
+      };
+
+      headerRow.forEach((h, idx) => {
+        for (const field of FIELD_KEYS) {
+          if (!auto[field] && mappingRules[field].test(h)) {
+            auto[field] = String(idx); // store column INDEX, not header name
+            break;
+          }
+        }
+      });
+
+      setColumnMap(auto);
+      setStep('map');
+    };
+    reader.readAsText(file);
+  }
+
+  function getColumnValue(row: string[], colId: string): string {
+    if (!colId) return '';
+    const idx = parseInt(colId, 10);
+    if (isNaN(idx) || idx < 0 || idx >= row.length) return '';
+    return row[idx] ?? '';
+  }
+
+  function buildPreviewRows(): Record<string, string>[] {
+    return rows.slice(0, 5).map(row => {
+      const obj: Record<string, string> = {};
+      for (const field of FIELD_KEYS) {
+        obj[field] = getColumnValue(row, columnMap[field]);
+      }
+      return obj;
+    }).filter(r => r.name);
+  }
+
+  function buildAllRows(): Record<string, string>[] {
+    return rows.map(row => {
+      const obj: Record<string, string> = {};
+      for (const field of FIELD_KEYS) {
+        obj[field] = getColumnValue(row, columnMap[field]);
+      }
+      return obj;
+    }).filter(r => r.name.trim());
+  }
+
+  async function handleImport() {
+    setImporting(true);
+    const errs: string[] = [];
+    let count = 0;
+    const allRows = buildAllRows().map(r => ({
+      name: r.name.trim(),
+      phone: r.phone.trim(),
+      whatsapp: r.whatsapp.trim(),
+      email: r.email.trim(),
+      address: r.address.trim(),
+      city: r.city.trim(),
+      state: r.state.trim(),
+      zip_code: '',
+      document: r.document.trim(),
+      notes: r.notes.trim(),
+    }));
+
+    const chunkSize = 50;
+    for (let i = 0; i < allRows.length; i += chunkSize) {
+      const chunk = allRows.slice(i, i + chunkSize);
+      const { error } = await supabase.from('customers').insert(chunk);
+      if (error) {
+        errs.push(`Linhas ${i + 1}–${i + chunk.length}: ${error.message}`);
+      } else {
+        count += chunk.length;
+      }
+    }
+
+    setImportCount(count);
+    setErrors(errs);
+    setImporting(false);
+    setStep('done');
+    if (errs.length === 0) onSuccess();
+  }
+
+  // Build select options from headers using index
+  const columnOptions = headers.map((h, i) => ({ label: h, value: String(i) }));
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div>
+            <h2 className="font-bold text-slate-800">Importar Clientes</h2>
+            <p className="text-sm text-slate-500">Importar via arquivo CSV ou planilha</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto px-6 py-5">
+          {/* step: upload */}
+          {step === 'upload' && (
+            <div className="space-y-4">
+              <div
+                onClick={() => fileRef.current?.click()}
+                className="border-2 border-dashed border-slate-200 rounded-xl p-10 text-center cursor-pointer hover:border-amber-400 hover:bg-amber-50 transition-colors"
+              >
+                <Upload size={32} className="text-slate-300 mx-auto mb-3" />
+                <p className="font-medium text-slate-600">Clique para selecionar o arquivo</p>
+                <p className="text-sm text-slate-400 mt-1">CSV ou TXT com separador vírgula, ponto-e-vírgula ou tabulação</p>
+                <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" onChange={handleFile} className="hidden" />
+              </div>
+              <div className="bg-slate-50 rounded-xl p-4">
+                <p className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-1.5">
+                  <Download size={12} /> Formato esperado
+                </p>
+                <code className="text-xs text-slate-500 font-mono whitespace-pre">
+{`nome,telefone,email,cidade
+João Silva,(11) 99999-0001,joao@email.com,São Paulo
+Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
+                </code>
+              </div>
+            </div>
+          )}
+
+          {/* step: map */}
+          {step === 'map' && (
+            <div className="space-y-4">
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
+                <p className="text-sm text-blue-700">
+                  Arquivo carregado com <strong>{rows.length}</strong> linhas e <strong>{headers.length}</strong> colunas.
+                  Mapeie as colunas para os campos do sistema.
+                </p>
+              </div>
+
+              {/* show first few rows for reference */}
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      {headers.map((h, i) => (
+                        <th key={i} className="px-2 py-1.5 text-left font-semibold text-slate-600 whitespace-nowrap">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {rows.slice(0, 3).map((row, ri) => (
+                      <tr key={ri} className="hover:bg-slate-50">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="px-2 py-1.5 text-slate-500 whitespace-nowrap max-w-[150px] truncate">
+                            {cell || '—'}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {FIELD_KEYS.map(field => (
+                  <div key={field}>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">{FIELD_LABELS[field]}</label>
+                    <select
+                      value={columnMap[field]}
+                      onChange={e => setColumnMap(prev => ({ ...prev, [field]: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white"
+                    >
+                      <option value="">— ignorar —</option>
+                      {columnOptions.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setStep('preview')}
+                disabled={!columnMap.name}
+                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
+              >
+                Ver Prévia
+              </button>
+            </div>
+          )}
+
+          {/* step: preview */}
+          {step === 'preview' && (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">
+                Prévia dos primeiros registros. Total a importar: <strong>{buildAllRows().length}</strong>
+              </p>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      {['Nome', 'Telefone', 'E-mail', 'Cidade'].map(h => (
+                        <th key={h} className="px-3 py-2 text-left font-semibold text-slate-600">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {buildPreviewRows().map((row, i) => (
+                      <tr key={i} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 text-slate-700 font-medium">{row.name || '—'}</td>
+                        <td className="px-3 py-2 text-slate-500">{row.phone || '—'}</td>
+                        <td className="px-3 py-2 text-slate-500">{row.email || '—'}</td>
+                        <td className="px-3 py-2 text-slate-500">{row.city || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {buildAllRows().length === 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  <p className="text-sm text-amber-700">
+                    Nenhuma linha válida encontrada. Verifique se a coluna "Nome" está mapeada corretamente.
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button onClick={() => setStep('map')}
+                  className="flex-1 py-2.5 border border-slate-200 text-slate-600 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors">
+                  Voltar
+                </button>
+                <button onClick={handleImport} disabled={importing || buildAllRows().length === 0}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">
+                  {importing ? 'Importando...' : `Importar ${buildAllRows().length} clientes`}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* step: done */}
+          {step === 'done' && (
+            <div className="text-center py-6">
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${
+                errors.length > 0 ? 'bg-amber-100' : 'bg-emerald-100'
+              }`}>
+                {errors.length > 0
+                  ? <AlertCircle size={32} className="text-amber-500" />
+                  : <CheckCircle size={32} className="text-emerald-500" />
+                }
+              </div>
+              <h3 className="text-lg font-bold text-slate-800 mb-1">Importação Concluída</h3>
+              <p className="text-slate-500 text-sm">{importCount} clientes importados com sucesso.</p>
+              {errors.length > 0 && (
+                <div className="mt-4 bg-red-50 border border-red-100 rounded-xl p-4 text-left">
+                  <p className="text-sm font-semibold text-red-700 mb-2 flex items-center gap-1.5">
+                    <AlertCircle size={14} /> {errors.length} lote(s) com erro
+                  </p>
+                  <div className="space-y-1 max-h-32 overflow-auto">
+                    {errors.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+                  </div>
+                </div>
+              )}
+              <button onClick={onClose}
+                className="mt-6 px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors">
+                Fechar
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

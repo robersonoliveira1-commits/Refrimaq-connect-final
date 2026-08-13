@@ -283,22 +283,21 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
   <title>Etiqueta Equipamento</title>
   <style>
     @page { 
-      size: 48mm 65mm; 
+      size: 100mm; 
       margin: 0; 
     }
     html, body {
       margin: 0;
       padding: 0;
-      width: 48mm;
+      width: 100mm;
       height: auto;
       box-sizing: border-box;
       font-family: sans-serif;
       background-color: #fff;
     }
     .label-card {
-      padding: 2mm 1mm 8mm 1mm;
-      width: 48mm;
-      height: auto;
+      padding: 5mm;
+      width: 100mm;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
@@ -308,20 +307,20 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
     }
     .header {
       font-weight: bold;
-      color: #d97706;
-      font-size: 8px;
+      color: #000;
+      font-size: 24px;
       width: 100%;
-      border-bottom: 0.8px solid #f59e0b;
-      padding-bottom: 1.5px;
+      border-bottom: 2px solid #000;
+      padding-bottom: 5px;
       margin-top: 0;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.5px;
       text-align: center;
     }
     .qr-code {
-      margin: 1.5mm auto;
-      width: 22mm;
-      height: 22mm;
+      margin: 5mm auto;
+      width: 60mm;
+      height: 60mm;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -332,19 +331,19 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
     }
     .details {
       text-align: left;
-      font-size: 8px;
-      color: #374151;
+      font-size: 18px;
+      color: #000;
       width: 100%;
-      line-height: 1.35;
-      margin-top: 1.5mm;
+      line-height: 1.5;
+      margin-top: 5mm;
     }
     .details div {
-      margin-bottom: 0.8mm;
+      margin-bottom: 2mm;
       word-wrap: break-word;
     }
     .details span {
       font-weight: bold;
-      color: #1f2937;
+      color: #000;
     }
   </style>
 </head>
@@ -352,14 +351,14 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
   <div class="label-card">
     <div class="header">REFRIMAQ CONNECT</div>
     <div class="qr-code">
-      <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrUrl)}" />
+      <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrUrl)}" />
     </div>
     <div class="details">
       <div><span>Equipamento:</span> ${order.equip_type || '—'}</div>
       <div><span>Marca/Mod:</span> ${order.equip_brand || '—'} / ${order.equip_model || '—'}</div>
       <div><span>Nº Série:</span> ${order.equip_serial || '—'}</div>
       <div><span>CPF Máquina:</span> ${order.equipment_id ? order.equipment_id.substring(0, 8).toUpperCase() : '—'}</div>
-      <div style="font-size: 7.5px; white-space: normal; line-height: 1.25;"><span>Cliente:</span> ${selectedCustomer?.name || '—'}</div>
+      <div style="font-size: 15px; white-space: normal; line-height: 1.3;"><span>Cliente:</span> ${selectedCustomer?.name || '—'}</div>
     </div>
   </div>
 </body>
@@ -831,7 +830,7 @@ ${attachments.length > 0 ? `
 </html>`;
 
     const cleanCustomerName = (selectedCustomer?.name ?? '').replace(/[/\\?%*:|"<>]/g, '').trim();
-    printHtml(html, `OS_${String(order.order_number ?? 0).padStart(4, '0')}_${cleanCustomerName}.pdf`);
+    printHtml(html, `${String(order.order_number ?? 0).padStart(4, '0')} ${cleanCustomerName}.pdf`);
   }
 
 

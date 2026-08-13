@@ -97,8 +97,13 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
   const filtered = orders.filter(o => {
     const matchStatus = statusFilter === 'all' || o.status === statusFilter;
     const q = search.toLowerCase();
+    const qClean = q.replace(/^#/, '').trim();
+    const orderNumStr = String(o.order_number ?? 0);
+    const orderNumPadded = orderNumStr.padStart(4, '0');
+
     const matchSearch = !q
-      || String(o.order_number).includes(q)
+      || orderNumStr.includes(qClean)
+      || orderNumPadded.includes(qClean)
       || (o.customers?.name ?? '').toLowerCase().includes(q)
       || (o.customers?.city ?? '').toLowerCase().includes(q)
       || (o.visit_type ?? '').toLowerCase().includes(q)
@@ -139,22 +144,21 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
   <title>Etiqueta Equipamento</title>
   <style>
     @page { 
-      size: 48mm 65mm; 
+      size: 100mm; 
       margin: 0; 
     }
     html, body {
       margin: 0;
       padding: 0;
-      width: 48mm;
+      width: 100mm;
       height: auto;
       box-sizing: border-box;
       font-family: sans-serif;
       background-color: #fff;
     }
     .label-card {
-      padding: 2mm 1mm 8mm 1mm;
-      width: 48mm;
-      height: auto;
+      padding: 5mm;
+      width: 100mm;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
@@ -164,20 +168,20 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
     }
     .header {
       font-weight: bold;
-      color: #d97706;
-      font-size: 8px;
+      color: #000;
+      font-size: 24px;
       width: 100%;
-      border-bottom: 0.8px solid #f59e0b;
-      padding-bottom: 1.5px;
+      border-bottom: 2px solid #000;
+      padding-bottom: 5px;
       margin-top: 0;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.5px;
       text-align: center;
     }
     .qr-code {
-      margin: 1.5mm auto;
-      width: 22mm;
-      height: 22mm;
+      margin: 5mm auto;
+      width: 60mm;
+      height: 60mm;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -188,19 +192,19 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
     }
     .details {
       text-align: left;
-      font-size: 8px;
-      color: #374151;
+      font-size: 18px;
+      color: #000;
       width: 100%;
-      line-height: 1.35;
-      margin-top: 1.5mm;
+      line-height: 1.5;
+      margin-top: 5mm;
     }
     .details div {
-      margin-bottom: 0.8mm;
+      margin-bottom: 2mm;
       word-wrap: break-word;
     }
     .details span {
       font-weight: bold;
-      color: #1f2937;
+      color: #000;
     }
   </style>
 </head>
@@ -208,7 +212,7 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
   <div class="label-card">
     <div class="header">REFRIMAQ CONNECT</div>
     <div class="qr-code">
-      <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrUrl)}" />
+      <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrUrl)}" />
     </div>
     <div class="details">
       <div><span>Equipamento:</span> ${eq.equip_type || '—'}</div>

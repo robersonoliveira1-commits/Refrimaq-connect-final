@@ -584,7 +584,7 @@ ${cfg.pdf_footer ? `<div style="margin-top:12px;font-size:11px;color:#64748b;pad
 </body></html>`;
 
     const cleanCustomerName = (order.customers?.name ?? '').replace(/[/\\?%*:|"<>]/g, '').trim();
-    printHtml(html, `OS_${String(order.order_number ?? 0).padStart(4, '0')}_${cleanCustomerName}.pdf`);
+    printHtml(html, `${String(order.order_number ?? 0).padStart(4, '0')} ${cleanCustomerName}.pdf`);
     setExportingPDF(false);
   }
 

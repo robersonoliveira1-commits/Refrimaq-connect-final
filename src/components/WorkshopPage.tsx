@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Wrench, Plus, Search, Clock, CheckCircle2, XCircle, Loader2, AlertTriangle, Smartphone, Shield, RefreshCw, ClipboardList, BarChart3, User, MapPin, Package, QrCode } from 'lucide-react';
+import { Wrench, Plus, Search, Clock, CheckCircle2, XCircle, Loader2, AlertTriangle, Smartphone, Shield, RefreshCw, ClipboardList, BarChart3, User, MapPin, Package, QrCode, Filter } from 'lucide-react';
 import { printHtml } from '../utils/print';
 import { supabase } from '../lib/supabase';
 import TechnicianOSView from './TechnicianOSView';
@@ -59,6 +59,12 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
   const [selectedEquipHistory, setSelectedEquipHistory] = useState<any[] | null>(null);
   const [viewingEquipName, setViewingEquipName] = useState('');
 
+  const [techFilter, setTechFilter] = useState<string>('all');
+  const [warrantyFilter, setWarrantyFilter] = useState<string>('all');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [serialSearch, setSerialSearch] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
   useEffect(() => {
     loadOrders();
     loadEquipments();
@@ -96,6 +102,11 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
 
   const filtered = orders.filter(o => {
     const matchStatus = statusFilter === 'all' || o.status === statusFilter;
+    const matchTech = techFilter === 'all' || (o.user_profiles?.full_name === techFilter);
+    const matchWarranty = warrantyFilter === 'all' || (o.warranty_type === warrantyFilter);
+    const matchCust = !customerSearch || (o.customers?.name ?? '').toLowerCase().includes(customerSearch.toLowerCase());
+    const matchSerial = !serialSearch || (o.equip_serial ?? '').toLowerCase().includes(serialSearch.toLowerCase());
+
     const q = search.toLowerCase();
     const qClean = q.replace(/^#/, '').trim();
     const orderNumStr = String(o.order_number ?? 0);
@@ -114,9 +125,14 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
       || (o.equip_type ?? '').toLowerCase().includes(q)
       || (o.equip_accessories ?? '').toLowerCase().includes(q)
       || (o.equip_condition ?? '').toLowerCase().includes(q)
-      || (o.warranty_type ?? '').toLowerCase().includes(q);
-    return matchStatus && matchSearch;
+      || (o.warranty_type ?? '').toLowerCase().includes(q)
+      || (o.user_profiles?.full_name ?? '').toLowerCase().includes(q);
+
+    return matchStatus && matchTech && matchWarranty && matchCust && matchSerial && matchSearch;
   });
+
+  const uniqueTechs = Array.from(new Set(orders.map(o => o.user_profiles?.full_name).filter(Boolean))) as string[];
+  const uniqueWarranties = Array.from(new Set(orders.map(o => o.warranty_type).filter(Boolean))) as string[];
 
   const filteredEquips = equipments.filter(eq => {
     const q = search.toLowerCase().replace('#', '').trim();
@@ -294,16 +310,72 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
         {/* Orders/Equipments filters */}
         {(workshopTab === 'orders' || workshopTab === 'equipments') && (
           <>
-            <div className="relative mb-3">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por número, cliente, tipo..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400"
-              />
+            <div className="flex items-center gap-2 mb-3">
+              <div className="relative flex-1">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por número, cliente, tipo..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400"
+                />
+              </div>
+              <button 
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                className={`p-2 border rounded-lg flex-shrink-0 transition-colors ${showAdvancedFilters ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                title="Filtros Avançados"
+              >
+                <Filter size={20} />
+              </button>
             </div>
+
+            {showAdvancedFilters && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div>
+                  <label className="block text-xs text-slate-500 font-medium mb-1">Técnico</label>
+                  <select
+                    value={techFilter}
+                    onChange={e => setTechFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                  >
+                    <option value="all">Todos</option>
+                    {uniqueTechs.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 font-medium mb-1">Garantia / Tipo</label>
+                  <select
+                    value={warrantyFilter}
+                    onChange={e => setWarrantyFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                  >
+                    <option value="all">Todos</option>
+                    {uniqueWarranties.map(w => <option key={w} value={w}>{w}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 font-medium mb-1">Cliente</label>
+                  <input
+                    type="text"
+                    value={customerSearch}
+                    onChange={e => setCustomerSearch(e.target.value)}
+                    placeholder="Nome do cliente..."
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 font-medium mb-1">Nº Série</label>
+                  <input
+                    type="text"
+                    value={serialSearch}
+                    onChange={e => setSerialSearch(e.target.value)}
+                    placeholder="Número de série..."
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                  />
+                </div>
+              </div>
+            )}
             {workshopTab === 'orders' && (
               <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
                 <button

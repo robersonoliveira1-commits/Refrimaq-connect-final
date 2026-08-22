@@ -919,7 +919,7 @@ ${attachments.length > 0 ? `
           {([
             { id: 'details', label: 'Detalhes', icon: FileText },
             { id: 'parts',   label: 'Peças',    icon: Package },
-            { id: 'pdv',     label: 'PDV',       icon: CreditCard },
+            { id: 'pdv',     label: 'Acerto Financeiro',       icon: CreditCard },
             { id: 'history', label: 'Histórico', icon: History },
           ] as const).map(({ id, label, icon: Icon }) => (
             <button

@@ -603,7 +603,6 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
     });
 
     const enriched: ServiceOrder[] = ((ordData as any) ?? [])
-      .filter((o: any) => o.status === 'Concluída' || o.status === 'Cancelada' || o.status_financeiro === 'pago')
       .map((o: any) => {
       const pt = partsMap[o.id] ?? 0;
       const total = pt + (o.labor_cost ?? 0);
@@ -720,7 +719,12 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
     const totalLate = late.reduce((s, o) => s + (o.total ?? 0), 0);
     const totalBilled = totalRevenue + totalPending + totalLate;
     const ticket = paid.length > 0 ? totalRevenue / paid.length : 0;
-    return { total: filtered.length, paid: paid.length, pending: pending.length, late: late.length, totalRevenue, totalPending, totalLate, ticket, totalBilled };
+
+    const totalCadastradas = filtered.length;
+    const totalFechadas = filtered.filter(o => o.status === 'Concluída' || o.status === 'Cancelada' || o.visit_type === 'Venda Avulsa' || o.visit_type === 'Venda de Usado').length;
+    const totalAbertas = totalCadastradas - totalFechadas;
+
+    return { total: filtered.length, paid: paid.length, pending: pending.length, late: late.length, totalRevenue, totalPending, totalLate, ticket, totalBilled, totalCadastradas, totalFechadas, totalAbertas };
   }, [filtered]);
 
   // ─── Chart data ──────────────────────────────────────────────────────────────
@@ -901,7 +905,7 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
             {/* ── Indicator Cards ────────────────────────────────────────── */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
               {[
-                { label: 'Total OS', value: indicators.total, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-50' },
+                { label: 'Total OS', value: indicators.totalCadastradas, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-50', subtext: `Fechadas: ${indicators.totalFechadas} | Abertas: ${indicators.totalAbertas}` },
                 { label: 'Faturamento', value: fmtCurrency(indicators.totalBilled), icon: DollarSign, color: 'text-green-600', bg: 'bg-green-50' },
                 { label: 'Total Recebido', value: fmtCurrency(indicators.totalRevenue), icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50' },
                 { label: 'Pendente', value: fmtCurrency(indicators.totalPending), icon: Clock, color: 'text-yellow-600', bg: 'bg-yellow-50' },
@@ -910,12 +914,21 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
                 { label: 'OS Pagas', value: indicators.paid, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50' },
                 { label: 'OS Atrasadas', value: indicators.late, icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50' },
               ].map(card => (
-                <div key={card.label} className={`${card.bg} rounded-xl border border-slate-200 p-3.5`}>
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <card.icon size={13} className={card.color} />
-                    <span className="text-[11px] text-slate-500 leading-none">{card.label}</span>
+                <div key={card.label} className={`${card.bg} rounded-xl border border-slate-200 p-3.5 flex flex-col justify-between`}>
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <card.icon size={13} className={card.color} />
+                      <span className="text-[11px] text-slate-500 leading-none">{card.label}</span>
+                    </div>
+                    <p className={`text-base font-extrabold ${card.color} leading-none`}>{card.value}</p>
                   </div>
-                  <p className={`text-base font-extrabold ${card.color} leading-none`}>{card.value}</p>
+                  {card.subtext && (
+                    <p className="text-[9px] text-slate-400 mt-2 font-medium tracking-wide">
+                      {card.subtext.split(' | ').map((part, i) => (
+                        <span key={i} className="block">{part}</span>
+                      ))}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

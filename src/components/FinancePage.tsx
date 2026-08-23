@@ -773,13 +773,24 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
 
   const tableFiltered = useMemo(() => {
     const q = search.toLowerCase();
-    return filtered.filter(o =>
-      !q ||
-      String(o.order_number).includes(q) ||
-      (o.customer_name ?? '').toLowerCase().includes(q) ||
-      (o.technician_name ?? '').toLowerCase().includes(q)
-    );
-  }, [filtered, search]);
+    return orders.filter(o => {
+      // Apply other filters (tech, customer, pm, fin_status) but NOT dates
+      if (filterTech && o.technician_id !== filterTech) return false;
+      if (filterCustomer && o.customer_id !== filterCustomer) return false;
+      if (filterPM && o.payment_method !== filterPM) return false;
+      if (filterFinStatus && o.fin_status !== filterFinStatus) return false;
+
+      // Apply search query
+      if (q) {
+        if (!String(o.order_number).includes(q) &&
+            !(o.customer_name ?? '').toLowerCase().includes(q) &&
+            !(o.technician_name ?? '').toLowerCase().includes(q)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [orders, search, filterTech, filterCustomer, filterPM, filterFinStatus]);
 
   const pageCount = Math.max(1, Math.ceil(tableFiltered.length / PAGE_SIZE));
   const paged = tableFiltered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);

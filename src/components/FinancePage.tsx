@@ -602,7 +602,9 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
       }
     });
 
-    const enriched: ServiceOrder[] = ((ordData as any) ?? []).map((o: any) => {
+    const enriched: ServiceOrder[] = ((ordData as any) ?? [])
+      .filter((o: any) => o.status === 'Concluída' || o.status === 'Cancelada' || o.status_financeiro === 'pago')
+      .map((o: any) => {
       const pt = partsMap[o.id] ?? 0;
       const total = pt + (o.labor_cost ?? 0);
       return {
@@ -695,9 +697,10 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
 
   const filtered = useMemo(() => {
     return orders.filter(o => {
-      const d = o.created_at.slice(0, 10);
-      if (dateFrom && d < dateFrom) return false;
-      if (dateTo && d > dateTo) return false;
+      const refDate = o.paid_at || o.data_conclusao || o.created_at;
+      const d = refDate ? refDate.slice(0, 10) : '';
+      if (dateFrom && d && d < dateFrom) return false;
+      if (dateTo && d && d > dateTo) return false;
       if (filterTech && o.technician_id !== filterTech) return false;
       if (filterCustomer && o.customer_id !== filterCustomer) return false;
       if (filterPM && o.payment_method !== filterPM) return false;

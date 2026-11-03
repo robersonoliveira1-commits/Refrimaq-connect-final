@@ -1,4 +1,5 @@
 import { printHtml } from '../utils/print';
+import { compressImageFile } from '../utils/imageCompressor';
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Loader2, Plus, Trash2, CheckCircle2, Package, FileText, History, CreditCard, Search, Camera, X, Download, AlertCircle, Wrench, QrCode } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -575,21 +576,27 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
   async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || isNew) return;
-    if (attachments.length >= MAX_PHOTOS) { alert(`Máximo de ${MAX_PHOTOS} fotos por OS.`); return; }
+    if (attachments.length >= MAX_PHOTOS) { alert(`Limite de ${MAX_PHOTOS} fotos por OS atingido.`); return; }
     setUploadingPhoto(true);
-    const ext = file.name.split('.').pop() ?? 'jpg';
-    const path = `${orderId}/${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from('service-order-attachments').upload(path, file, { upsert: true });
-    if (error) { alert('Erro ao enviar foto.'); setUploadingPhoto(false); return; }
-    const { data: urlData } = supabase.storage.from('service-order-attachments').getPublicUrl(path);
-    const { data: att } = await supabase
-      .from('service_order_attachments')
-      .insert({ service_order_id: orderId, photo_url: urlData.publicUrl })
-      .select('id,photo_url')
-      .single();
-    if (att) setAttachments(a => [...a, att as unknown as Attachment]);
-    setUploadingPhoto(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    try {
+      const fileToUpload = await compressImageFile(file, 1200, 1200, 0.75);
+      const path = `${orderId}/${Date.now()}.jpg`;
+      const { error } = await supabase.storage.from('service-order-attachments').upload(path, fileToUpload, { upsert: true });
+      if (error) { alert('Erro ao enviar foto.'); setUploadingPhoto(false); return; }
+      const { data: urlData } = supabase.storage.from('service-order-attachments').getPublicUrl(path);
+      const { data: att } = await supabase
+        .from('service_order_attachments')
+        .insert({ service_order_id: orderId, photo_url: urlData.publicUrl })
+        .select('id,photo_url')
+        .single();
+      if (att) setAttachments(a => [...a, att as unknown as Attachment]);
+    } catch (err) {
+      console.error('Erro na compressao/upload da foto:', err);
+      alert('Erro ao processar imagem.');
+    } finally {
+      setUploadingPhoto(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   }
 
   async function deleteAttachment(att: Attachment) {

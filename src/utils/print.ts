@@ -1,3 +1,5 @@
+import { compressImageElementForPrint } from './imageCompressor';
+
 export async function printHtml(html: string, filename = 'documento.pdf') {
   console.log("Opening Print Dialog for:", filename);
 
@@ -30,19 +32,28 @@ export async function printHtml(html: string, filename = 'documento.pdf') {
   doc.write(htmlWithTitle);
   doc.close();
 
-  // Wait for images to load before printing
-  const images = doc.querySelectorAll('img');
-  const promises = Array.from(images).map(img => {
-    if (img.complete) return Promise.resolve();
-    return new Promise((resolve) => {
-      img.onload = resolve;
-      img.onerror = resolve;
-    });
-  });
+  // Wait for images to load and optimize them for lightweight PDF generation
+  const images = Array.from(doc.querySelectorAll('img'));
+  
+  // Aguarda carregamento inicial de todas as imagens
+  await Promise.all(
+    images.map((img) => {
+      if (img.complete) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+      });
+    })
+  );
+
+  // Comprime cada imagem para resolução máxima de 1024px e JPEG 0.72 (~80-150KB cada)
+  // Isso reduz o PDF final gerado pelo navegador ("Salvar como PDF") de 5-15MB para ~1MB.
+  await Promise.all(
+    images.map((img) => compressImageElementForPrint(img, 1024, 1024, 0.72))
+  );
 
   try {
-    await Promise.all(promises);
-    // Pequeno delay para garantir renderização
+    // Pequeno delay para garantir renderização no iframe
     setTimeout(() => {
       iframe.contentWindow?.focus();
       iframe.contentWindow?.print();
@@ -54,7 +65,7 @@ export async function printHtml(html: string, filename = 'documento.pdf') {
         }
         document.title = originalTitle;
       }, 1000);
-    }, 500);
+    }, 400);
   } catch (err) {
     console.error(err);
     if (document.body.contains(iframe)) document.body.removeChild(iframe);

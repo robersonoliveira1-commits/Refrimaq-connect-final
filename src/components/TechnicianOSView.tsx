@@ -1,4 +1,5 @@
 import { printHtml } from '../utils/print';
+import { compressImageFile } from '../utils/imageCompressor';
 import { useState, useEffect, useRef } from 'react';
 import {
   Wrench, LogOut, Loader2, ChevronLeft, Clock, CheckCircle2,
@@ -437,20 +438,26 @@ function OSDetailView({ order, profile, companyConfig, onBack, onStatusChanged, 
 
   async function uploadPhoto(file: File) {
     setUploadingPhoto(true);
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg';
-    const path = `${order.id}/${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from('service-order-attachments').upload(path, file, { contentType: file.type });
-    if (!error) {
-      const { data: urlData } = supabase.storage.from('service-order-attachments').getPublicUrl(path);
-      const { data: att } = await supabase.from('service_order_attachments').insert({
-        service_order_id: order.id, photo_url: urlData.publicUrl,
-      }).select().single();
-      if (att) setAttachments(a => [...a, att as unknown as Attachment]);
-    } else {
-      alert('Erro ao enviar foto: ' + error.message);
+    try {
+      const fileToUpload = await compressImageFile(file, 1200, 1200, 0.75);
+      const path = `${order.id}/${Date.now()}.jpg`;
+      const { error } = await supabase.storage.from('service-order-attachments').upload(path, fileToUpload, { contentType: 'image/jpeg', upsert: true });
+      if (!error) {
+        const { data: urlData } = supabase.storage.from('service-order-attachments').getPublicUrl(path);
+        const { data: att } = await supabase.from('service_order_attachments').insert({
+          service_order_id: order.id, photo_url: urlData.publicUrl,
+        }).select().single();
+        if (att) setAttachments(a => [...a, att as unknown as Attachment]);
+      } else {
+        alert('Erro ao enviar foto: ' + error.message);
+      }
+    } catch (err) {
+      console.error('Erro ao comprimir/enviar foto:', err);
+      alert('Erro ao processar imagem.');
+    } finally {
+      setUploadingPhoto(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
     }
-    setUploadingPhoto(false);
-    if (photoInputRef.current) photoInputRef.current.value = '';
   }
 
   const handleDownloadPhoto = async (url: string, index: number) => {

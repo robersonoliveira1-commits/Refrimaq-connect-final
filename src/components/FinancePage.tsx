@@ -580,7 +580,7 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
       cfg,
     ] = await Promise.all([
       supabase.from('service_orders').select('*, customers(name)').order('created_at', { ascending: false }),
-      supabase.from('service_order_parts').select('service_order_id,quantity,unit_price,product_id'),
+      supabase.from('service_order_parts').select('service_order_id,quantity,unit_price,product_id').limit(10000),
       supabase.from('user_profiles').select('id,full_name').eq('active', true),
       supabase.from('customers').select('id,name').order('name').limit(500),
       supabase.from('boletos').select('*').order('created_at', { ascending: false }),
@@ -594,24 +594,32 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
     const cust = (custData as unknown as Customer[]) ?? [];
 
     const partsRaw = (partsData as any[]) ?? [];
-    const partsMap: Record<string, number> = {};
+    const partsWithProdMap: Record<string, number> = {};
+    const partsNoProdMap: Record<string, number> = {};
     partsRaw.forEach(p => {
-      // If product_id is null, the item is a service or manual item, which is already aggregated into labor_cost
+      const val = (Number(p.quantity) || 0) * (Number(p.unit_price) || 0);
       if (p.product_id) {
-        partsMap[p.service_order_id] = (partsMap[p.service_order_id] ?? 0) + p.quantity * p.unit_price;
+        partsWithProdMap[p.service_order_id] = (partsWithProdMap[p.service_order_id] ?? 0) + val;
+      } else {
+        partsNoProdMap[p.service_order_id] = (partsNoProdMap[p.service_order_id] ?? 0) + val;
       }
     });
 
     const enriched: ServiceOrder[] = ((ordData as any) ?? [])
       .map((o: any) => {
-      const pt = partsMap[o.id] ?? 0;
-      const total = pt + (o.labor_cost ?? 0);
+      const stockParts = partsWithProdMap[o.id] ?? 0;
+      const serviceParts = partsNoProdMap[o.id] ?? 0;
+      // Garante que o valor lançado em encerramento operacional (serviços/mão de obra) seja contabilizado
+      // Usa o maior entre labor_cost registrado e a soma de itens de serviço para prevenir perda de valor ou duplicidade
+      const labor = Math.max(Number(o.labor_cost) || 0, serviceParts);
+      const total = stockParts + labor;
       return {
         ...o,
         customer_name: o.customers?.name ?? '—',
         technician_name: o.technician_id ? (techMap[o.technician_id] ?? '—') : '—',
         payment_method: o.payment_method || (o.status_financeiro === 'pendente' || getFinStatus({ ...o, total }) === 'pendente' ? 'A definir' : '—'),
-        parts_total: pt,
+        parts_total: stockParts,
+        labor_cost: labor,
         total,
         fin_status: getFinStatus({ ...o, total }),
       };

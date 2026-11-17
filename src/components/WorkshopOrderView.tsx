@@ -464,8 +464,28 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
     // ── Operational closure only ──────────────────────────────────────────────
     // Does NOT touch paid_at, payment_method or status_financeiro.
     // Financial closure happens exclusively in the Financeiro module.
+    const calculatedServices = parts.filter(p => !p.product_id).reduce((s, p) => s + p.quantity * p.unit_price, 0);
+
+    // Persist any unsaved parts or services so financial module has complete data
+    const { data: existingParts } = await supabase.from('service_order_parts').select('id').eq('service_order_id', orderId);
+    const existingIds = new Set((existingParts ?? []).map((p: { id: string }) => p.id));
+    const currentIds = new Set(parts.map(p => p.id).filter(Boolean));
+    for (const id of existingIds) {
+      if (!currentIds.has(id)) {
+        await supabase.from('service_order_parts').delete().eq('id', id);
+      }
+    }
+    for (const part of parts) {
+      if (part.id && existingIds.has(part.id)) {
+        await supabase.from('service_order_parts').update({ part_name: part.part_name, quantity: part.quantity, unit_price: part.unit_price }).eq('id', part.id);
+      } else if (!part.id) {
+        await supabase.from('service_order_parts').insert({ ...part, service_order_id: orderId });
+      }
+    }
+
     await supabase.from('service_orders').update({
       status: 'Concluída',
+      labor_cost: calculatedServices,
       data_conclusao: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', orderId);

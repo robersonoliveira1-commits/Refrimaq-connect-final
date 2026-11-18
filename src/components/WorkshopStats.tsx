@@ -60,27 +60,36 @@ interface Customer { id: string; name: string }
 
 const STATUS_COLORS: Record<string, string> = {
   'Triagem': 'bg-slate-400',
+  'Em Diagnóstico': 'bg-sky-400',
   'Aguardando Orçamento': 'bg-yellow-400',
+  'Aguardando Aprovação': 'bg-amber-400',
   'Aguardando Peças': 'bg-orange-400',
   'Em Manutenção': 'bg-blue-400',
+  'Aguardando Conferência': 'bg-indigo-500',
   'Concluída': 'bg-emerald-500',
   'Cancelada': 'bg-red-400',
 };
 
 const STATUS_TEXT: Record<string, string> = {
   'Triagem': 'text-slate-600',
+  'Em Diagnóstico': 'text-sky-700',
   'Aguardando Orçamento': 'text-yellow-700',
+  'Aguardando Aprovação': 'text-amber-700',
   'Aguardando Peças': 'text-orange-700',
   'Em Manutenção': 'text-blue-700',
+  'Aguardando Conferência': 'text-indigo-700',
   'Concluída': 'text-emerald-700',
   'Cancelada': 'text-red-700',
 };
 
 const STATUS_BG: Record<string, string> = {
   'Triagem': 'bg-slate-50 border-slate-200',
+  'Em Diagnóstico': 'bg-sky-50 border-sky-200',
   'Aguardando Orçamento': 'bg-yellow-50 border-yellow-200',
+  'Aguardando Aprovação': 'bg-amber-50 border-amber-200',
   'Aguardando Peças': 'bg-orange-50 border-orange-200',
   'Em Manutenção': 'bg-blue-50 border-blue-200',
+  'Aguardando Conferência': 'bg-indigo-50 border-indigo-200',
   'Concluída': 'bg-emerald-50 border-emerald-200',
   'Cancelada': 'bg-red-50 border-red-200',
 };
@@ -342,8 +351,12 @@ export default function WorkshopStats({ refresh }: Props) {
 
   const indicators = useMemo(() => {
     const total = filteredOrders.length;
-    const abertas = filteredOrders.filter(o => ['Triagem', 'Aguardando Orçamento', 'Aguardando Peças'].includes(o.status)).length;
-    const andamento = filteredOrders.filter(o => o.status === 'Em Manutenção').length;
+    const abertas = filteredOrders.filter(o =>
+      ['Triagem', 'Em Diagnóstico', 'Aguardando Orçamento', 'Aguardando Aprovação', 'Aguardando Peças'].includes(o.status)
+    ).length;
+    const andamento = filteredOrders.filter(o =>
+      ['Em Manutenção', 'Aguardando Conferência'].includes(o.status)
+    ).length;
     const concluidas = filteredOrders.filter(o => o.status === 'Concluída').length;
 
     const durations = filteredOrders
@@ -524,7 +537,17 @@ export default function WorkshopStats({ refresh }: Props) {
   // ─── Render ───────────────────────────────────────────────────────────────────
 
   const VISIT_TYPES = ['Corretiva', 'Instalação', 'Assepsia', 'Preventiva'];
-  const STATUSES = ['Triagem', 'Aguardando Orçamento', 'Aguardando Peças', 'Em Manutenção', 'Concluída', 'Cancelada'];
+  const STATUSES = [
+    'Triagem',
+    'Em Diagnóstico',
+    'Aguardando Orçamento',
+    'Aguardando Aprovação',
+    'Aguardando Peças',
+    'Em Manutenção',
+    'Aguardando Conferência',
+    'Concluída',
+    'Cancelada',
+  ];
 
   return (
     <div className="space-y-6">

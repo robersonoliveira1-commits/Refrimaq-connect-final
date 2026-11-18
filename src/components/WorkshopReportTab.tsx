@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { calculateOrderFinancials } from '../lib/osStockSync';
 import { Search, Loader2, FileSpreadsheet, Calendar, AlertCircle } from 'lucide-react';
 
 interface OSPart {
@@ -13,6 +14,7 @@ interface ServiceOrder {
   order_number: number;
   status: string;
   visit_type: string;
+  labor_cost: number | null;
   equip_type: string | null;
   equip_model: string | null;
   equip_serial: string | null;
@@ -22,13 +24,26 @@ interface ServiceOrder {
   service_order_parts: OSPart[];
 }
 
-const ALL_STATUSES = ['Triagem', 'Aguardando Orçamento', 'Aguardando Peças', 'Em Manutenção', 'Concluída', 'Cancelada'];
+const ALL_STATUSES = [
+  'Triagem',
+  'Em Diagnóstico',
+  'Aguardando Orçamento',
+  'Aguardando Aprovação',
+  'Aguardando Peças',
+  'Em Manutenção',
+  'Aguardando Conferência',
+  'Concluída',
+  'Cancelada',
+];
 
 const STATUS_COLOR: Record<string, string> = {
   'Triagem': 'bg-slate-100 text-slate-700 border-slate-200',
+  'Em Diagnóstico': 'bg-sky-50 text-sky-700 border-sky-200',
   'Aguardando Orçamento': 'bg-blue-50 text-blue-700 border-blue-200',
+  'Aguardando Aprovação': 'bg-amber-50 text-amber-700 border-amber-200',
   'Aguardando Peças': 'bg-amber-50 text-amber-700 border-amber-200',
   'Em Manutenção': 'bg-orange-50 text-orange-700 border-orange-200',
+  'Aguardando Conferência': 'bg-indigo-50 text-indigo-700 border-indigo-200',
   'Concluída': 'bg-green-50 text-green-700 border-green-200',
   'Cancelada': 'bg-red-50 text-red-700 border-red-200',
 };
@@ -57,6 +72,7 @@ export default function WorkshopReportTab() {
           order_number,
           status,
           visit_type,
+          labor_cost,
           equip_type,
           equip_model,
           equip_serial,
@@ -80,26 +96,18 @@ export default function WorkshopReportTab() {
     }
   }
 
-  // Calculate totals for a specific order
+  // Calculate totals for a specific order using the unified formula
   const getOrderTotals = (order: ServiceOrder) => {
-    let partsTotal = 0;
-    let servicesTotal = 0;
-
-    if (order.service_order_parts) {
-      order.service_order_parts.forEach(part => {
-        const subtotal = (part.quantity || 0) * (part.unit_price || 0);
-        if (part.product_id) {
-          partsTotal += subtotal;
-        } else {
-          servicesTotal += subtotal;
-        }
-      });
-    }
+    const { partsTotal, laborCost, grandTotal } = calculateOrderFinancials(
+      order.service_order_parts ?? [],
+      order.labor_cost,
+      true
+    );
 
     return {
       partsTotal,
-      servicesTotal,
-      grandTotal: partsTotal + servicesTotal,
+      servicesTotal: laborCost,
+      grandTotal,
     };
   };
 
@@ -237,9 +245,12 @@ export default function WorkshopReportTab() {
               // Color config mapping
               const barColor = {
                 'Triagem': 'bg-slate-400',
+                'Em Diagnóstico': 'bg-sky-500',
                 'Aguardando Orçamento': 'bg-blue-500',
+                'Aguardando Aprovação': 'bg-amber-400',
                 'Aguardando Peças': 'bg-amber-500',
                 'Em Manutenção': 'bg-orange-500',
+                'Aguardando Conferência': 'bg-indigo-500',
                 'Concluída': 'bg-emerald-500',
                 'Cancelada': 'bg-red-500',
               }[status] || 'bg-slate-500';

@@ -1,54 +1,77 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
-import { ServiceOrder } from '../../lib/types';
-import { FileText, Loader2, RefreshCw, AlertCircle, TrendingUp, DollarSign } from 'lucide-react';
+import { calculateOrderFinancials, OSPartLike } from '../../lib/osStockSync';
+import { FileText, Loader2, RefreshCw, AlertCircle, TrendingUp } from 'lucide-react';
+
+interface ReceivableOrder {
+  id: string;
+  order_number: number;
+  status: string;
+  status_financeiro?: string | null;
+  due_date: string | null;
+  labor_cost: number | null;
+  customer_name: string;
+  total: number;
+  fin_status: 'pago' | 'pendente' | 'atrasado';
+}
 
 const fmtCurrency = (v: number | null | undefined) =>
   (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function ReceivablesTab() {
   const [loading, setLoading] = useState(true);
-  const [orders, setOrders] = useState<ServiceOrder[]>([]);
+  const [orders, setOrders] = useState<ReceivableOrder[]>([]);
 
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     const { data: ordData } = await supabase.from('service_orders').select('*, customers(name)').order('created_at', { ascending: false });
-    const { data: partsData } = await supabase.from('service_order_parts').select('service_order_id,quantity,unit_price,product_id');
+    const { data: partsData } = await supabase.from('service_order_parts').select('service_order_id,quantity,unit_price,product_id').limit(10000);
 
-    const partsMap: Record<string, number> = {};
+    const partsByOrder: Record<string, OSPartLike[]> = {};
     (partsData ?? []).forEach(p => {
-      if (p.product_id) {
-        partsMap[p.service_order_id] = (partsMap[p.service_order_id] ?? 0) + (p.quantity * p.unit_price);
-      }
+      if (!partsByOrder[p.service_order_id]) partsByOrder[p.service_order_id] = [];
+      partsByOrder[p.service_order_id].push(p as OSPartLike);
     });
 
-    const enriched = (ordData ?? []).map(o => {
-      const pt = partsMap[o.id] ?? 0;
-      const total = pt + (o.labor_cost ?? 0);
-      let fin_status = o.status_financeiro;
-      if (fin_status !== 'pago' && o.due_date && new Date(o.due_date) < new Date()) {
-        fin_status = 'atrasado';
-      }
-      if (fin_status !== 'pago' && fin_status !== 'atrasado') fin_status = 'pendente';
-      
-      const customerName = (o as any).customers?.name ?? '—';
-      return { ...o, customer_name: customerName, total, fin_status };
-    });
+    const enriched: ReceivableOrder[] = (ordData ?? [])
+      .filter(o => o.status !== 'Cancelada' && o.status_financeiro !== 'cancelada')
+      .map(o => {
+        const { grandTotal } = calculateOrderFinancials(partsByOrder[o.id] ?? [], o.labor_cost, true);
+        let fin_status: 'pago' | 'pendente' | 'atrasado' = 'pendente';
+        if (o.status_financeiro === 'pago') {
+          fin_status = 'pago';
+        } else if (o.status_financeiro === 'atrasado' || (o.due_date && new Date(o.due_date) < new Date())) {
+          fin_status = 'atrasado';
+        }
+
+        const customerName = (o as { customers?: { name?: string } | null }).customers?.name ?? '—';
+        return {
+          id: o.id,
+          order_number: o.order_number,
+          status: o.status,
+          status_financeiro: o.status_financeiro,
+          due_date: o.due_date,
+          labor_cost: o.labor_cost,
+          customer_name: customerName,
+          total: grandTotal,
+          fin_status,
+        };
+      });
 
     setOrders(enriched);
     setLoading(false);
   }
 
   const indicators = useMemo(() => {
-    const pendentes = orders.filter(o => (o as any).fin_status === 'pendente');
-    const atrasados = orders.filter(o => (o as any).fin_status === 'atrasado');
-    const recebidos = orders.filter(o => (o as any).fin_status === 'pago');
-    
-    const totalPendente = pendentes.reduce((acc, o) => acc + (o as any).total, 0);
-    const totalAtrasado = atrasados.reduce((acc, o) => acc + (o as any).total, 0);
-    const totalRecebido = recebidos.reduce((acc, o) => acc + (o as any).total, 0);
+    const pendentes = orders.filter(o => o.fin_status === 'pendente');
+    const atrasados = orders.filter(o => o.fin_status === 'atrasado');
+    const recebidos = orders.filter(o => o.fin_status === 'pago');
+
+    const totalPendente = pendentes.reduce((acc, o) => acc + o.total, 0);
+    const totalAtrasado = atrasados.reduce((acc, o) => acc + o.total, 0);
+    const totalRecebido = recebidos.reduce((acc, o) => acc + o.total, 0);
     const ticket = recebidos.length ? totalRecebido / recebidos.length : 0;
 
     return { totalPendente, totalAtrasado, totalRecebido, ticket };
@@ -102,14 +125,14 @@ export default function ReceivablesTab() {
               {orders.map(o => (
                 <tr key={o.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">#{String(o.order_number).padStart(4, '0')}</td>
-                  <td className="px-4 py-3">{(o as any).customer_name}</td>
+                  <td className="px-4 py-3">{o.customer_name}</td>
                   <td className="px-4 py-3">{o.due_date ? new Date(o.due_date).toLocaleDateString('pt-BR') : '—'}</td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${(o as any).fin_status === 'pago' ? 'bg-emerald-100 text-emerald-700' : (o as any).fin_status === 'atrasado' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                      {(o as any).fin_status.toUpperCase()}
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${o.fin_status === 'pago' ? 'bg-emerald-100 text-emerald-700' : o.fin_status === 'atrasado' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      {o.fin_status.toUpperCase()}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right font-bold text-slate-700">{fmtCurrency((o as any).total)}</td>
+                  <td className="px-4 py-3 text-right font-bold text-slate-700">{fmtCurrency(o.total)}</td>
                 </tr>
               ))}
               {orders.length === 0 && <tr><td colSpan={5} className="text-center py-6 text-slate-500">Nenhum registro encontrado</td></tr>}

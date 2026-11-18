@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Wrench, Plus, Search, Clock, CheckCircle2, XCircle, Loader2, AlertTriangle, Smartphone, Shield, RefreshCw, ClipboardList, BarChart3, User, MapPin, Package, QrCode, Filter } from 'lucide-react';
+import { Wrench, Plus, Search, Clock, CheckCircle2, XCircle, Loader2, AlertTriangle, Smartphone, Shield, RefreshCw, ClipboardList, BarChart3, User, MapPin, Package, QrCode, Filter, ClipboardCheck } from 'lucide-react';
 import { printHtml } from '../utils/print';
 import { supabase } from '../lib/supabase';
+import { calculateOrderFinancials } from '../lib/osStockSync';
 import TechnicianOSView from './TechnicianOSView';
 import WorkshopReportTab from './WorkshopReportTab';
 import WorkshopStats from './WorkshopStats';
@@ -11,6 +12,8 @@ interface ServiceOrder {
   order_number: number;
   warranty_type?: string | null;
   status: string;
+  status_financeiro?: string | null;
+  paid_at?: string | null;
   visit_type: string;
   priority: string;
   diagnosis: string;
@@ -26,18 +29,48 @@ interface ServiceOrder {
   equip_condition?: string | null;
   customers?: { name: string; city: string };
   user_profiles?: { full_name: string };
+  service_order_parts?: { product_id: string | null; quantity: number; unit_price: number }[];
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: typeof Clock }> = {
-  'Triagem':               { label: 'Triagem',           color: 'bg-slate-100 text-slate-700',   icon: Clock },
-  'Aguardando Orçamento':  { label: 'Orçamento',         color: 'bg-blue-100 text-blue-700',     icon: Clock },
-  'Aguardando Peças':      { label: 'Aguardando Peças',  color: 'bg-amber-100 text-amber-700',   icon: AlertTriangle },
-  'Em Manutenção':         { label: 'Em Manutenção',     color: 'bg-orange-100 text-orange-700', icon: Wrench },
-  'Concluída':             { label: 'Concluída',         color: 'bg-green-100 text-green-700',   icon: CheckCircle2 },
-  'Cancelada':             { label: 'Cancelada',         color: 'bg-red-100 text-red-700',       icon: XCircle },
+  'Triagem':                { label: 'Triagem',           color: 'bg-slate-100 text-slate-700',   icon: Clock },
+  'Em Diagnóstico':         { label: 'Diagnóstico',       color: 'bg-sky-100 text-sky-700',       icon: Clock },
+  'Aguardando Orçamento':   { label: 'Orçamento',         color: 'bg-blue-100 text-blue-700',     icon: Clock },
+  'Aguardando Aprovação':   { label: 'Aprovação',         color: 'bg-amber-100 text-amber-700',   icon: Clock },
+  'Aguardando Peças':       { label: 'Aguardando Peças',  color: 'bg-amber-100 text-amber-700',   icon: AlertTriangle },
+  'Em Manutenção':          { label: 'Em Manutenção',     color: 'bg-orange-100 text-orange-700', icon: Wrench },
+  'Aguardando Conferência': { label: 'Conferência',       color: 'bg-indigo-100 text-indigo-700', icon: ClipboardCheck },
+  'Concluída':              { label: 'Concluída',         color: 'bg-green-100 text-green-700',   icon: CheckCircle2 },
+  'Cancelada':              { label: 'Cancelada',         color: 'bg-red-100 text-red-700',       icon: XCircle },
 };
 
-const ALL_STATUSES = ['Triagem', 'Aguardando Orçamento', 'Aguardando Peças', 'Em Manutenção', 'Concluída', 'Cancelada'];
+const ALL_STATUSES = [
+  'Triagem',
+  'Em Diagnóstico',
+  'Aguardando Orçamento',
+  'Aguardando Aprovação',
+  'Aguardando Peças',
+  'Em Manutenção',
+  'Aguardando Conferência',
+  'Concluída',
+  'Cancelada',
+];
+
+function getOrderReviewInfo(order: ServiceOrder) {
+  const { grandTotal } = calculateOrderFinancials(order.service_order_parts ?? [], order.labor_cost, true);
+  const isPaid = order.status_financeiro === 'pago' || Boolean(order.paid_at);
+  const isAwaitingReview = order.status === 'Aguardando Conferência';
+  const isConcludedIncomplete =
+    order.status === 'Concluída' &&
+    !isPaid &&
+    ((grandTotal === 0 && !order.warranty_type) || !(order.diagnosis ?? '').trim());
+  return {
+    grandTotal,
+    isAwaitingReview,
+    isConcludedIncomplete,
+    needsReview: isAwaitingReview || isConcludedIncomplete,
+  };
+}
 
 type WorkshopTab = 'orders' | 'equipments' | 'mobile' | 'report' | 'stats';
 
@@ -74,7 +107,7 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
     setLoading(true);
     const { data } = await supabase
       .from('service_orders')
-      .select('*, customers(name, city), user_profiles(full_name)')
+      .select('*, customers(name, city), user_profiles(full_name), service_order_parts(product_id, quantity, unit_price)')
       .order('order_number', { ascending: false });
     setOrders((data as unknown as ServiceOrder[]) ?? []);
     setLoading(false);
@@ -100,8 +133,12 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
     setSelectedEquipHistory(data ?? []);
   }
 
+  const reviewCount = orders.filter(o => getOrderReviewInfo(o).needsReview).length;
+
   const filtered = orders.filter(o => {
-    const matchStatus = statusFilter === 'all' || o.status === statusFilter;
+    const matchStatus =
+      statusFilter === 'all' ||
+      (statusFilter === '__review__' ? getOrderReviewInfo(o).needsReview : o.status === statusFilter);
     const matchTech = techFilter === 'all' || (o.user_profiles?.full_name === techFilter);
     const matchWarranty = warrantyFilter === 'all' || (o.warranty_type === warrantyFilter);
     const matchCust = !customerSearch || (o.customers?.name ?? '').toLowerCase().includes(customerSearch.toLowerCase());
@@ -384,6 +421,19 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
                 >
                   Todas ({orders.length})
                 </button>
+                <button
+                  onClick={() => setStatusFilter('__review__')}
+                  className={`flex-shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    statusFilter === '__review__'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : reviewCount > 0
+                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  <ClipboardCheck size={12} />
+                  Revisar ({reviewCount})
+                </button>
                 {ALL_STATUSES.map(s => (
                   <button
                     key={s}
@@ -533,12 +583,15 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
               
               // Modern gradients for the left badge
               const gradientMap: Record<string, string> = {
-                'Triagem':               'from-slate-100 to-slate-200/70 text-slate-700',
-                'Aguardando Orçamento':  'from-blue-50 to-indigo-100/70 text-blue-800',
-                'Aguardando Peças':      'from-orange-50 to-amber-100/60 text-orange-800',
-                'Em Manutenção':         'from-orange-50 to-red-100/60 text-orange-800',
-                'Concluída':             'from-emerald-50 to-green-100/70 text-emerald-800',
-                'Cancelada':             'from-red-50 to-red-100/70 text-red-800',
+                'Triagem':                'from-slate-100 to-slate-200/70 text-slate-700',
+                'Em Diagnóstico':         'from-sky-50 to-blue-100/70 text-sky-800',
+                'Aguardando Orçamento':   'from-blue-50 to-indigo-100/70 text-blue-800',
+                'Aguardando Aprovação':   'from-amber-50 to-amber-100/70 text-amber-800',
+                'Aguardando Peças':       'from-orange-50 to-amber-100/60 text-orange-800',
+                'Em Manutenção':          'from-orange-50 to-red-100/60 text-orange-800',
+                'Aguardando Conferência': 'from-indigo-50 to-purple-100/70 text-indigo-800',
+                'Concluída':              'from-emerald-50 to-green-100/70 text-emerald-800',
+                'Cancelada':              'from-red-50 to-red-100/70 text-red-800',
               };
               const leftBg = gradientMap[order.status] ?? 'from-slate-100 to-slate-200/70 text-slate-700';
 
@@ -551,11 +604,16 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
               const leftPrioClass = prioBg[order.priority] ?? 'bg-slate-400 text-white';
 
               const isCanceled = order.status === 'Cancelada';
+              const reviewInfo = getOrderReviewInfo(order);
               return (
                 <button key={order.id} onClick={() => onSelectOrder(order.id)}
                   className={`w-full rounded-3xl border overflow-hidden flex flex-row text-left active:scale-[0.99] hover:shadow-md transition-all relative ${
-                    isCanceled 
-                      ? 'bg-red-50/40 border-red-300 shadow-sm shadow-red-100' 
+                    isCanceled
+                      ? 'bg-red-50/40 border-red-300 shadow-sm shadow-red-100'
+                      : reviewInfo.isAwaitingReview
+                      ? 'bg-indigo-50/30 border-indigo-300 shadow-sm'
+                      : reviewInfo.isConcludedIncomplete
+                      ? 'bg-amber-50/40 border-amber-300 shadow-sm'
                       : 'bg-white border-slate-200/80 shadow-sm'
                   }`}>
                   
@@ -587,6 +645,18 @@ export default function WorkshopPage({ onMenuClick, onSelectOrder, onNewOrder, r
                     {isCanceled && (
                       <div className="absolute top-3 right-3 bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wider shadow-sm z-10 border border-red-700">
                         Cancelada
+                      </div>
+                    )}
+                    {!isCanceled && reviewInfo.isAwaitingReview && (
+                      <div className="mb-1.5 inline-flex items-center gap-1 self-start bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">
+                        <ClipboardCheck size={11} />
+                        Conferência Pendente — Lançar peças/valores
+                      </div>
+                    )}
+                    {!isCanceled && reviewInfo.isConcludedIncomplete && (
+                      <div className="mb-1.5 inline-flex items-center gap-1 self-start bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">
+                        <AlertTriangle size={11} />
+                        {reviewInfo.grandTotal === 0 ? 'Sem valor — Reabrir e ajustar' : 'Sem diagnóstico — Revisar'}
                       </div>
                     )}
                     <div>

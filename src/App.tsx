@@ -25,7 +25,7 @@ import UsedSalesPage from './components/UsedSalesPage';
 import PublicEquipmentView from './components/PublicEquipmentView';
 import { Customer } from './lib/types';
 
-type Page = 'dashboard' | 'customers' | 'schedule' | 'reports' | 'logistics' | 'team' | 'backup' | 'workshop' | 'finance' | 'config' | 'parts';
+type Page = 'dashboard' | 'customers' | 'schedule' | 'reports' | 'logistics' | 'team' | 'backup' | 'workshop' | 'finance' | 'sales' | 'config' | 'parts';
 
 function AppContent() {
   const { user, profile, loading } = useAuth();
@@ -100,6 +100,11 @@ function AdminApp() {
   function handleSelectCustomer(id: string) {
     setSelectedCustomerId(id);
     setPage('customers');
+  }
+
+  function handleOpenWorkshopOrder(orderId: string) {
+    setWorkshopOrderId(orderId);
+    setPage('workshop');
   }
 
   function handleAddContact(customerId: string, customerName = '') {
@@ -216,14 +221,18 @@ function AdminApp() {
         {page === 'workshop' && workshopOrderId && (
           <WorkshopOrderView
             orderId={workshopOrderId}
-            onBack={() => setWorkshopOrderId(null)}
+            onBack={() => { setWorkshopOrderId(null); triggerRefresh(); }}
             onMenuClick={() => setSidebarOpen(true)}
             onSelectCustomer={handleSelectCustomer}
           />
         )}
 
         {page === 'finance' && (
-          <FinancePage onMenuClick={() => setSidebarOpen(true)} refresh={refresh} />
+          <FinancePage
+            onMenuClick={() => setSidebarOpen(true)}
+            refresh={refresh}
+            onOpenOrder={handleOpenWorkshopOrder}
+          />
         )}
 
         {page === 'sales' && (

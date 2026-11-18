@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import { calculateOrderFinancials, OSPartLike } from '../../lib/osStockSync';
 import { BarChart3, TrendingUp, TrendingDown, DollarSign, Download } from 'lucide-react';
-import { Expense } from '../../lib/types';
 
 const fmtCurrency = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function CashFlowTab() {
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [incomes, setIncomes] = useState<{ date: string; amount: number }[]>([]);
   const [expenses, setExpenses] = useState<{ date: string; amount: number }[]>([]);
   const [transactions, setTransactions] = useState<{ id: string; date: string; datetime: string; description: string; type: 'entrada'|'saida'; amount: number }[]>([]);
@@ -29,24 +29,19 @@ export default function CashFlowTab() {
       supabase.from('expenses').select('id, paid_at, amount, description, created_at').eq('status', 'pago')
     ]);
 
-    // For service orders we must fetch parts_total to know the real total, but since we didn't join service_order_parts in the above query for simplicity,
-    // actually, let's fetch total directly from an RPC or just approximate with labor_cost if parts are too heavy to fetch here.
-    // Wait, the main dashboard fetches `service_order_parts`. Cash flow should too.
-    const { data: partsData } = await supabase.from('service_order_parts').select('service_order_id, quantity, unit_price, product_id');
-    const partsMap: Record<string, number> = {};
+    const { data: partsData } = await supabase.from('service_order_parts').select('service_order_id, quantity, unit_price, product_id').limit(10000);
+    const partsByOrder: Record<string, OSPartLike[]> = {};
     (partsData || []).forEach(p => {
-      if (p.product_id) {
-        partsMap[p.service_order_id] = (partsMap[p.service_order_id] || 0) + (p.quantity * p.unit_price);
-      }
+      if (!partsByOrder[p.service_order_id]) partsByOrder[p.service_order_id] = [];
+      partsByOrder[p.service_order_id].push(p as OSPartLike);
     });
 
     const incs: { date: string; amount: number }[] = [];
     const exps: { date: string; amount: number }[] = [];
     const allTrans: { id: string; date: string; datetime: string; description: string; type: 'entrada'|'saida'; amount: number }[] = [];
-    
-    (osData || []).forEach((o: any) => {
-      const pt = partsMap[o.id] || 0;
-      const amt = pt + (o.labor_cost || 0);
+
+    (osData || []).forEach((o: { id: string; paid_at: string | null; created_at: string; labor_cost: number | null; order_number: number }) => {
+      const { grandTotal: amt } = calculateOrderFinancials(partsByOrder[o.id] ?? [], o.labor_cost, true);
       const datetime = o.paid_at || o.created_at;
       const dt = datetime.slice(0, 10);
       incs.push({ date: dt, amount: amt });

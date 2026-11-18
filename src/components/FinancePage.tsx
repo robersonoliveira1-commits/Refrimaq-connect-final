@@ -4,7 +4,7 @@ import {
   DollarSign, TrendingUp, AlertCircle, Clock, CheckCircle2,
   Filter, Download, Search, ChevronLeft, ChevronRight,
   Loader2, RefreshCw, FileText, CreditCard, Users, BarChart3,
-  X, Calendar, Plus,
+  X, Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { fetchCompanyConfig, CompanyConfig, EMPTY_CONFIG } from '../lib/companyConfig';
@@ -34,12 +34,6 @@ interface ServiceOrder {
   parts_total?: number;
   total?: number;
   fin_status?: FinStatus;
-}
-
-interface OSPart {
-  service_order_id: string;
-  quantity: number;
-  unit_price: number;
 }
 
 interface Boleto {
@@ -438,11 +432,15 @@ interface PaymentModalProps {
   order: ServiceOrder;
   onClose: () => void;
   onConfirm: (orderId: string, method: string, amount: number) => Promise<void>;
+  onOpenOrder?: (orderId: string) => void;
 }
 
-function PaymentModal({ order, onClose, onConfirm }: PaymentModalProps) {
+function PaymentModal({ order, onClose, onConfirm, onOpenOrder }: PaymentModalProps) {
   const [method, setMethod] = useState('');
   const [saving, setSaving] = useState(false);
+  const needsOsAdjustment =
+    order.order_number > 0 &&
+    ((order.total ?? 0) === 0 || order.status === 'Aguardando Conferência');
 
   async function submit() {
     if (!method) return;
@@ -465,6 +463,33 @@ function PaymentModal({ order, onClose, onConfirm }: PaymentModalProps) {
         </div>
 
         <div className="px-6 py-5 space-y-4">
+          {needsOsAdjustment && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                <p>
+                  {order.status === 'Aguardando Conferência'
+                    ? 'Esta OS ainda está Aguardando Conferência Administrativa.'
+                    : 'Esta OS está com valor total R$ 0,00 (sem peças ou serviços lançados).'}{' '}
+                  Recomenda-se abrir a OS para lançar peças/valores antes de registrar o pagamento.
+                </p>
+              </div>
+              {onOpenOrder && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenOrder(order.id);
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-xs font-semibold transition-colors"
+                >
+                  <Pencil size={13} />
+                  Abrir OS para Lançar Peças e Valores
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Status banner */}
           <div className="bg-slate-50 rounded-xl p-4 space-y-1">
             <div className="flex items-center justify-between">
@@ -524,9 +549,13 @@ function PaymentModal({ order, onClose, onConfirm }: PaymentModalProps) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-interface Props { onMenuClick: () => void; refresh: number }
+interface Props {
+  onMenuClick: () => void;
+  refresh: number;
+  onOpenOrder?: (orderId: string) => void;
+}
 
-export default function FinancePage({ onMenuClick, refresh }: Props) {
+export default function FinancePage({ onMenuClick, refresh, onOpenOrder }: Props) {
   const { profile } = useAuth();
   const [activeTab, setActiveTab] = useState<'geral' | 'avancado'>('geral');
   const [loading, setLoading] = useState(true);
@@ -680,7 +709,8 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
     setLoading(false);
   }
 
-  async function registerPayment(orderId: string, method: string, amount: number) {
+  async function registerPayment(orderId: string, method: string, _amount: number) {
+    void _amount;
     // ── Financial closure only ────────────────────────────────────────────────
     // Does NOT alter status (operational) — only financial fields.
     await supabase.from('service_orders').update({
@@ -840,7 +870,7 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
         >
           Visão Geral
         </button>
-        {(profile?.role === 'admin' || profile?.role === 'financeiro') && (
+        {(profile?.role === 'admin' || (profile?.role as string) === 'financeiro') && (
           <button
             onClick={() => setActiveTab('avancado')}
             className={`py-2 px-4 rounded-xl text-sm font-bold transition-colors ${
@@ -1072,10 +1102,22 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
                           <td className="px-4 py-2.5 text-slate-500 hidden sm:table-cell">{o.technician_name}</td>
                           <td className="px-4 py-2.5 text-slate-500 hidden md:table-cell">{o.payment_method ?? '—'}</td>
                           <td className="px-4 py-2.5">
-                            <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.text}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-                              {cfg.label}
-                            </span>
+                            <div className="flex flex-col items-start gap-1">
+                              <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.text}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+                                {cfg.label}
+                              </span>
+                              {o.order_number > 0 && o.status === 'Aguardando Conferência' && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  Em Conferência
+                                </span>
+                              )}
+                              {o.order_number > 0 && (o.total ?? 0) === 0 && fs !== 'cancelada' && !o.warranty_type && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                                  Sem valor
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-2.5 text-slate-400 hidden lg:table-cell">
                             {o.due_date ? (
@@ -1087,6 +1129,15 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
                           <td className="px-4 py-2.5 text-right font-bold text-slate-700">{fmtCurrency(o.total ?? 0)}</td>
                           <td className="px-4 py-2.5">
                             <div className="flex items-center justify-center gap-1.5">
+                              {o.order_number > 0 && onOpenOrder && fs !== 'cancelada' && (
+                                <button
+                                  onClick={() => onOpenOrder(o.id)}
+                                  title="Abrir / editar OS na Oficina"
+                                  className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg transition-colors"
+                                >
+                                  <Pencil size={12} />
+                                </button>
+                              )}
                               {fs !== 'pago' && fs !== 'cancelada' && (
                                 <button
                                   onClick={() => setPayOrder(o)}
@@ -1203,6 +1254,7 @@ export default function FinancePage({ onMenuClick, refresh }: Props) {
           order={payOrder}
           onClose={() => setPayOrder(null)}
           onConfirm={registerPayment}
+          onOpenOrder={onOpenOrder}
         />
       )}
     </div>

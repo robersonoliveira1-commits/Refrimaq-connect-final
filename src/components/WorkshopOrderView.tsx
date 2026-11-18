@@ -1,10 +1,22 @@
 import { printHtml } from '../utils/print';
 import { compressImageFile } from '../utils/imageCompressor';
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, Loader2, Plus, Trash2, CheckCircle2, Package, FileText, History, CreditCard, Search, Camera, X, Download, AlertCircle, Wrench, QrCode } from 'lucide-react';
+import {
+  ArrowLeft, Save, Loader2, Plus, Trash2, CheckCircle2, Package, FileText,
+  History, CreditCard, Search, Camera, X, Download, AlertCircle, Wrench,
+  QrCode, RotateCcw, ShieldAlert, ClipboardCheck, ArrowRight, User, Clock,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth';
 import { formatDateTime } from '../lib/types';
 import { fetchCompanyConfig, CompanyConfig, EMPTY_CONFIG } from '../lib/companyConfig';
+import {
+  applyOrderStockDeductions,
+  calculateOrderFinancials,
+  logFinancialAudit,
+  logOsStageTransition,
+  reverseOrderStockDeductions,
+} from '../lib/osStockSync';
 
 interface Customer { id: string; name: string; city: string; phone: string }
 interface Technician { id: string; full_name: string }
@@ -34,6 +46,9 @@ interface ServiceOrder {
   visit_type: string;
   priority: string;
   status: string;
+  status_financeiro?: string | null;
+  data_conclusao?: string | null;
+  due_date?: string | null;
   diagnosis: string;
   labor_cost: number;
   payment_method: string | null;
@@ -52,6 +67,23 @@ interface ServiceOrder {
   is_rework: boolean;
 }
 
+interface StageHistoryEntry {
+  id: string;
+  from_status: string;
+  to_status: string;
+  changed_by_name: string;
+  notes: string;
+  created_at: string;
+}
+
+interface OrderBoleto {
+  id: string;
+  amount: number;
+  due_date: string;
+  status: 'emitido' | 'pago' | 'vencido';
+  notes: string | null;
+}
+
 interface HistoryContact {
   id: string;
   subject: string;
@@ -62,8 +94,24 @@ interface HistoryContact {
 
 const VISIT_TYPES = ['Corretiva', 'Instalação', 'Assepsia', 'Preventiva'];
 const PRIORITIES = ['Baixa', 'Média', 'Alta', 'Urgente'];
-const STATUSES = ['Triagem', 'Aguardando Orçamento', 'Aguardando Peças', 'Em Manutenção', 'Concluída', 'Cancelada'];
+const STATUSES = [
+  'Triagem',
+  'Em Diagnóstico',
+  'Aguardando Orçamento',
+  'Aguardando Aprovação',
+  'Aguardando Peças',
+  'Em Manutenção',
+  'Aguardando Conferência',
+  'Concluída',
+  'Cancelada',
+];
 const PAYMENT_METHODS = ['Dinheiro', 'Pix', 'Cartão de Débito', 'Cartão de Crédito', 'Boleto', 'Transferência'];
+const REOPEN_QUICK_REASONS = [
+  'Técnico encerrou sem peças ou valores',
+  'Ajuste de peças ou mão de obra',
+  'Correção de diagnóstico ou dados da OS',
+  'Ajuste solicitado pelo financeiro',
+];
 
 interface Props {
   orderId: string;
@@ -75,6 +123,9 @@ interface Props {
 type Tab = 'details' | 'parts' | 'pdv' | 'history';
 
 export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSelectCustomer }: Props) {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
+  const operatorName = profile?.full_name || 'Administrativo';
   const isNew = orderId === 'new';
 
   const [tab, setTab] = useState<Tab>('details');
@@ -82,6 +133,14 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!isNew);
   const [finalizing, setFinalizing] = useState(false);
+  const [loadedStatus, setLoadedStatus] = useState<string>('Triagem');
+  const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
+  const [orderBoletos, setOrderBoletos] = useState<OrderBoleto[]>([]);
+  const [reopenModalMode, setReopenModalMode] = useState<'reopen' | 'reverse_payment' | null>(null);
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopenConfirmChecked, setReopenConfirmChecked] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [feedbackBanner, setFeedbackBanner] = useState<{ type: 'success' | 'warning'; message: string } | null>(null);
 
   // Machine Search States
   const [equipSearchQuery, setEquipSearchQuery] = useState('');
@@ -199,31 +258,49 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
       .eq('id', orderId)
       .single();
     if (o) {
-      setOrder(o as ServiceOrder);
-      const c = (await supabase.from('customers').select('id,name,city,phone').eq('id', o.customer_id).single()).data;
+      const loaded = o as ServiceOrder;
+      setOrder(loaded);
+      setLoadedStatus(loaded.status || 'Triagem');
+      const c = (await supabase.from('customers').select('id,name,city,phone').eq('id', loaded.customer_id).single()).data;
       if (c) setSelectedCustomer(c as unknown as Customer);
     }
-    const { data: p } = await supabase
-      .from('service_order_parts')
-      .select('*')
-      .eq('service_order_id', orderId)
-      .order('created_at');
-    setParts((p as unknown as OSPart[]) ?? []);
 
-    const { data: h } = await supabase
-      .from('contacts')
-      .select('id,subject,details,contacted_at,contact_type')
-      .eq('customer_id', o?.customer_id ?? '')
-      .order('contacted_at', { ascending: false })
-      .limit(30);
+    const [
+      { data: p },
+      { data: h },
+      { data: att },
+      { data: stHist },
+      { data: boletosData },
+      { data: freshStock },
+    ] = await Promise.all([
+      supabase.from('service_order_parts').select('*').eq('service_order_id', orderId).order('created_at'),
+      supabase.from('contacts').select('id,subject,details,contacted_at,contact_type').eq('customer_id', o?.customer_id ?? '').order('contacted_at', { ascending: false }).limit(30),
+      supabase.from('service_order_attachments').select('id,photo_url').eq('service_order_id', orderId).order('created_at'),
+      supabase.from('os_stage_history').select('id,from_status,to_status,changed_by_name,notes,created_at').eq('service_order_id', orderId).order('created_at', { ascending: false }),
+      supabase.from('boletos').select('id,amount,due_date,status,notes').eq('service_order_id', orderId).order('created_at', { ascending: false }),
+      supabase.from('products').select('id,name,unit_price,stock_quantity').eq('active', true).order('name'),
+    ]);
+
+    const loadedParts = ((p as unknown as OSPart[]) ?? []).slice();
+    const legacyLabor = Number((o as ServiceOrder | null)?.labor_cost) || 0;
+    const hasServiceRows = loadedParts.some(part => !part.product_id);
+    if (legacyLabor > 0 && !hasServiceRows) {
+      loadedParts.push({
+        product_id: null,
+        part_name: 'Mão de obra / Serviço (lançamento anterior)',
+        quantity: 1,
+        unit_price: legacyLabor,
+      });
+    }
+
+    setParts(loadedParts);
     setHistory((h as unknown as HistoryContact[]) ?? []);
-
-    const { data: att } = await supabase
-      .from('service_order_attachments')
-      .select('id,photo_url')
-      .eq('service_order_id', orderId)
-      .order('created_at');
     setAttachments((att as unknown as Attachment[]) ?? []);
+    setStageHistory((stHist as unknown as StageHistoryEntry[]) ?? []);
+    setOrderBoletos((boletosData as unknown as OrderBoleto[]) ?? []);
+    if (freshStock) {
+      setStockProducts(freshStock as unknown as StockProduct[]);
+    }
 
     setLoading(false);
   }
@@ -367,16 +444,13 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
     printHtml(html, `Etiqueta_Equipamento_${order.equip_serial || 'S-N'}.pdf`);
   }
 
-  async function save() {
-    if (!order.customer_id) { alert('Selecione um cliente.'); return; }
-    setSaving(true);
-
+  async function syncEquipmentRecord(): Promise<string | null> {
     let equipmentId = order.equipment_id || null;
     const hasEquipmentData = order.equip_type || order.equip_brand || order.equip_model || order.equip_serial;
 
-    if (hasEquipmentData) {
+    if (hasEquipmentData && order.customer_id) {
       const serial = order.equip_serial?.trim() || '';
-      let existingEquip: any = null;
+      let existingEquip: { id: string } | null = null;
 
       if (serial) {
         const { data } = await supabase
@@ -385,7 +459,7 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
           .eq('customer_id', order.customer_id)
           .eq('equip_serial', serial)
           .maybeSingle();
-        existingEquip = data;
+        existingEquip = data as { id: string } | null;
       }
 
       const equipData = {
@@ -411,14 +485,65 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
           .select('id')
           .single();
         if (data) {
-          equipmentId = data.id;
+          equipmentId = (data as { id: string }).id;
         }
       }
     }
-    
-    // Calcula o labor_cost baseado em peças vs serviços
-    const calculatedServices = parts.filter(p => !p.product_id).reduce((s, p) => s + p.quantity * p.unit_price, 0);
-    const orderToSave = { ...order, equipment_id: equipmentId, labor_cost: calculatedServices, updated_at: new Date().toISOString() };
+    return equipmentId;
+  }
+
+  async function persistPartsForOrder(targetOrderId: string): Promise<void> {
+    const { data: existingParts } = await supabase
+      .from('service_order_parts')
+      .select('id')
+      .eq('service_order_id', targetOrderId);
+    const existingIds = new Set((existingParts ?? []).map((p: { id: string }) => p.id));
+    const currentIds = new Set(parts.map(p => p.id).filter(Boolean));
+    for (const id of existingIds) {
+      if (!currentIds.has(id)) {
+        await supabase.from('service_order_parts').delete().eq('id', id);
+      }
+    }
+    for (const part of parts) {
+      if (part.id && existingIds.has(part.id)) {
+        await supabase
+          .from('service_order_parts')
+          .update({
+            part_name: part.part_name,
+            quantity: part.quantity,
+            unit_price: part.unit_price,
+          })
+          .eq('id', part.id);
+      } else if (!part.id) {
+        await supabase
+          .from('service_order_parts')
+          .insert({
+            product_id: part.product_id,
+            part_name: part.part_name,
+            quantity: part.quantity,
+            unit_price: part.unit_price,
+            service_order_id: targetOrderId,
+          });
+      }
+    }
+  }
+
+  async function save() {
+    if (!order.customer_id) { alert('Selecione um cliente.'); return; }
+    if (!isNew && (order.status === 'Concluída' || order.status === 'Cancelada') && loadedStatus !== order.status) {
+      alert('Para concluir ou cancelar a OS com controle de estoque e financeiro, utilize os botões na aba "Acerto Financeiro".');
+      return;
+    }
+
+    setSaving(true);
+    const equipmentId = await syncEquipmentRecord();
+    const { laborCost } = calculateOrderFinancials(parts, order.labor_cost, false);
+    const orderToSave = {
+      ...order,
+      equipment_id: equipmentId,
+      labor_cost: laborCost,
+      updated_at: new Date().toISOString(),
+    };
 
     if (isNew) {
       const { data } = await supabase
@@ -429,28 +554,38 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
       if (data) {
         const newId = (data as ServiceOrder).id;
         for (const part of parts) {
-          await supabase.from('service_order_parts').insert({ ...part, service_order_id: newId });
+          await supabase.from('service_order_parts').insert({
+            product_id: part.product_id,
+            part_name: part.part_name,
+            quantity: part.quantity,
+            unit_price: part.unit_price,
+            service_order_id: newId,
+          });
         }
+        await logOsStageTransition({
+          orderId: newId,
+          fromStatus: '',
+          toStatus: orderToSave.status || 'Triagem',
+          userName: operatorName,
+          userId: profile?.id,
+          notes: 'OS aberta no painel administrativo',
+        });
         setSaving(false);
         onBack();
         return;
       }
     } else {
       await supabase.from('service_orders').update(orderToSave).eq('id', orderId);
-      const { data: existingParts } = await supabase.from('service_order_parts').select('id').eq('service_order_id', orderId);
-      const existingIds = new Set((existingParts ?? []).map((p: { id: string }) => p.id));
-      const currentIds = new Set(parts.map(p => p.id).filter(Boolean));
-      for (const id of existingIds) {
-        if (!currentIds.has(id)) {
-          await supabase.from('service_order_parts').delete().eq('id', id);
-        }
-      }
-      for (const part of parts) {
-        if (part.id && existingIds.has(part.id)) {
-          await supabase.from('service_order_parts').update({ part_name: part.part_name, quantity: part.quantity, unit_price: part.unit_price }).eq('id', part.id);
-        } else if (!part.id) {
-          await supabase.from('service_order_parts').insert({ ...part, service_order_id: orderId });
-        }
+      await persistPartsForOrder(orderId);
+      if (order.status && order.status !== loadedStatus) {
+        await logOsStageTransition({
+          orderId,
+          fromStatus: loadedStatus,
+          toStatus: order.status,
+          userName: operatorName,
+          userId: profile?.id,
+          notes: 'Alteração manual de status na Oficina',
+        });
       }
     }
     setSaving(false);
@@ -458,115 +593,273 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
   }
 
   async function finalizeOS() {
+    if (!order.customer_id) { alert('Selecione um cliente.'); return; }
+    const financials = calculateOrderFinancials(parts, order.labor_cost, false);
+
+    if (financials.grandTotal === 0 && !order.warranty_type) {
+      const proceedZero = window.confirm(
+        'Esta OS está com valor total R$ 0,00 (nenhuma peça ou serviço com valor lançado). Deseja concluir e liberar para o Financeiro mesmo assim?'
+      );
+      if (!proceedZero) return;
+    }
+
     setFinalizing(true);
+    try {
+      const now = new Date().toISOString();
+      const equipmentId = await syncEquipmentRecord();
+      const isAlreadyPaid = order.status_financeiro === 'pago' || Boolean(order.paid_at);
 
-    // ── Operational closure only ──────────────────────────────────────────────
-    // Does NOT touch paid_at, payment_method or status_financeiro.
-    // Financial closure happens exclusively in the Financeiro module.
-    const calculatedServices = parts.filter(p => !p.product_id).reduce((s, p) => s + p.quantity * p.unit_price, 0);
+      await persistPartsForOrder(orderId);
 
-    // Persist any unsaved parts or services so financial module has complete data
-    const { data: existingParts } = await supabase.from('service_order_parts').select('id').eq('service_order_id', orderId);
-    const existingIds = new Set((existingParts ?? []).map((p: { id: string }) => p.id));
-    const currentIds = new Set(parts.map(p => p.id).filter(Boolean));
-    for (const id of existingIds) {
-      if (!currentIds.has(id)) {
-        await supabase.from('service_order_parts').delete().eq('id', id);
-      }
-    }
-    for (const part of parts) {
-      if (part.id && existingIds.has(part.id)) {
-        await supabase.from('service_order_parts').update({ part_name: part.part_name, quantity: part.quantity, unit_price: part.unit_price }).eq('id', part.id);
-      } else if (!part.id) {
-        await supabase.from('service_order_parts').insert({ ...part, service_order_id: orderId });
-      }
-    }
+      // Persist all edited OS fields + operational conclusion timestamps and recalculated labor_cost
+      await supabase.from('service_orders').update({
+        ...order,
+        equipment_id: equipmentId,
+        status: 'Concluída',
+        labor_cost: financials.laborCost,
+        data_conclusao: order.data_conclusao || now,
+        status_financeiro: isAlreadyPaid ? 'pago' : 'pendente',
+        updated_at: now,
+      }).eq('id', orderId);
 
-    await supabase.from('service_orders').update({
-      status: 'Concluída',
-      labor_cost: calculatedServices,
-      data_conclusao: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', orderId);
+      // Idempotent stock reconciliation (applies only delta vs previous deductions, records service_order_id)
+      await applyOrderStockDeductions({
+        orderId,
+        orderNumber: order.order_number ?? 0,
+        parts,
+        responsible: operatorName,
+      });
 
-    // Decrement stock for parts linked to products (operational step)
-    for (const part of parts) {
-      if (part.product_id) {
-        const prod = stockProducts.find(p => p.id === part.product_id);
-        if (prod) {
-          const after = Math.max(0, prod.stock_quantity - part.quantity);
-          await supabase.from('products')
-            .update({ stock_quantity: after })
-            .eq('id', part.product_id);
-            
-          await supabase.from('stock_movements').insert({
-            product_id: part.product_id,
-            product_name: prod.name,
-            movement_type: 'saida',
-            quantity: part.quantity,
-            quantity_before: prod.stock_quantity,
-            quantity_after: after,
-            reason: `Uso em OS #${order?.order_number}`,
-            responsible: 'Sistema OS'
+      // Synchronize unpaid boletos if OS total changed
+      const unpaidBoletos = orderBoletos.filter(b => b.status !== 'pago');
+      let updatedBoletosCount = 0;
+      for (const boleto of unpaidBoletos) {
+        if (Math.abs((Number(boleto.amount) || 0) - financials.grandTotal) > 0.01) {
+          const prevAmt = Number(boleto.amount) || 0;
+          const noteSuffix = `[Reajuste administrativo por ${operatorName} em ${new Date().toLocaleDateString('pt-BR')}: R$ ${prevAmt.toFixed(2)} -> R$ ${financials.grandTotal.toFixed(2)}]`;
+          const newNotes = boleto.notes ? `${boleto.notes} | ${noteSuffix}` : noteSuffix;
+          await supabase
+            .from('boletos')
+            .update({ amount: financials.grandTotal, notes: newNotes })
+            .eq('id', boleto.id);
+          await logFinancialAudit({
+            actionType: 'update',
+            tableName: 'boletos',
+            recordId: boleto.id,
+            userName: operatorName,
+            changes: {
+              action: 'sync_boleto_amount_after_os_adjustment',
+              service_order_id: orderId,
+              previous_amount: prevAmt,
+              new_amount: financials.grandTotal,
+            },
           });
+          updatedBoletosCount += 1;
         }
       }
-    }
 
-    setFinalizing(false);
-    // Reload so isConcluida flips to true and we show the completion banner
-    loadOrder();
+      const wasReopenedBefore = stageHistory.some(h => h.from_status === 'Concluída');
+      await logOsStageTransition({
+        orderId,
+        fromStatus: loadedStatus,
+        toStatus: 'Concluída',
+        userName: operatorName,
+        userId: profile?.id,
+        notes: wasReopenedBefore
+          ? `OS reconcluída após ajuste administrativo (Total: R$ ${financials.grandTotal.toFixed(2)})`
+          : `Conferência administrativa concluída — liberada para o Financeiro (Total: R$ ${financials.grandTotal.toFixed(2)})`,
+      });
+
+      if (wasReopenedBefore) {
+        await logFinancialAudit({
+          actionType: 'update',
+          tableName: 'service_orders',
+          recordId: orderId,
+          userName: operatorName,
+          changes: {
+            action: 'reconclude_os_after_adjustment',
+            parts_total: financials.partsTotal,
+            labor_cost: financials.laborCost,
+            grand_total: financials.grandTotal,
+            updated_unpaid_boletos: updatedBoletosCount,
+          },
+        });
+      }
+
+      if (updatedBoletosCount > 0) {
+        setFeedbackBanner({
+          type: 'warning',
+          message: `OS concluída e liberada ao Financeiro! ${updatedBoletosCount} boleto(s) em aberto tiveram o valor atualizado para R$ ${financials.grandTotal.toFixed(2)} — lembre-se de reimprimir o boleto atualizado no módulo Financeiro.`,
+        });
+      } else {
+        setFeedbackBanner({
+          type: 'success',
+          message: `OS #${String(order.order_number ?? 0).padStart(4, '0')} concluída e liberada para o Financeiro com total de R$ ${financials.grandTotal.toFixed(2)}.`,
+        });
+      }
+
+      await loadOrder();
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao concluir a Ordem de Serviço.');
+    } finally {
+      setFinalizing(false);
+    }
+  }
+
+  async function handleConfirmReopen() {
+    if (!reopenModalMode) return;
+    const reversePayment = reopenModalMode === 'reverse_payment';
+    const trimmedReason = reopenReason.trim();
+    const minLen = reversePayment ? 10 : 5;
+    if (trimmedReason.length < minLen) return;
+    if (reversePayment && !reopenConfirmChecked) return;
+
+    setReopening(true);
+    try {
+      const now = new Date().toISOString();
+      const orderNumPadded = String(order.order_number ?? 0).padStart(4, '0');
+      const previousFinancials = calculateOrderFinancials(parts, order.labor_cost, true);
+
+      // Safely reverse ONLY stock that was actually deducted by this OS
+      const stockReversedCount = await reverseOrderStockDeductions({
+        orderId,
+        orderNumber: order.order_number ?? 0,
+        responsible: operatorName,
+        reason: reversePayment
+          ? `Estorno por reversão de pagamento e reabertura da OS #${orderNumPadded}`
+          : `Estorno por reabertura administrativa da OS #${orderNumPadded}`,
+      });
+
+      const updatePayload: Record<string, unknown> = {
+        status: 'Aguardando Conferência',
+        updated_at: now,
+      };
+      if (reversePayment) {
+        updatePayload.status_financeiro = 'pendente';
+        updatePayload.paid_at = null;
+      }
+
+      await supabase.from('service_orders').update(updatePayload).eq('id', orderId);
+
+      // If payment was reversed, revert paid boletos back to emitido
+      let reversedBoletosCount = 0;
+      if (reversePayment) {
+        const paidBoletos = orderBoletos.filter(b => b.status === 'pago');
+        for (const boleto of paidBoletos) {
+          const noteSuffix = `[Estorno administrativo por ${operatorName} em ${new Date().toLocaleDateString('pt-BR')}: ${trimmedReason}]`;
+          const newNotes = boleto.notes ? `${boleto.notes} | ${noteSuffix}` : noteSuffix;
+          await supabase
+            .from('boletos')
+            .update({ status: 'emitido', paid_at: null, notes: newNotes })
+            .eq('id', boleto.id);
+          reversedBoletosCount += 1;
+        }
+      }
+
+      await logOsStageTransition({
+        orderId,
+        fromStatus: order.status || 'Concluída',
+        toStatus: 'Aguardando Conferência',
+        userName: operatorName,
+        userId: profile?.id,
+        notes: reversePayment
+          ? `[ESTORNO DE PAGAMENTO + REABERTURA] ${trimmedReason}`
+          : `[REABERTURA ADMINISTRATIVA] ${trimmedReason}`,
+      });
+
+      await logFinancialAudit({
+        actionType: 'update',
+        tableName: 'service_orders',
+        recordId: orderId,
+        userName: operatorName,
+        changes: {
+          action: reversePayment ? 'reverse_payment_and_reopen_os' : 'reopen_os_for_adjustment',
+          reason: trimmedReason,
+          previous_status: order.status,
+          new_status: 'Aguardando Conferência',
+          previous_status_financeiro: order.status_financeiro ?? 'pendente',
+          previous_paid_at: order.paid_at ?? null,
+          previous_payment_method: order.payment_method ?? null,
+          previous_total: previousFinancials.grandTotal,
+          stock_products_reversed: stockReversedCount,
+          boletos_reverted: reversedBoletosCount,
+        },
+      });
+
+      setReopenModalMode(null);
+      setReopenReason('');
+      setReopenConfirmChecked(false);
+      await loadOrder();
+      setTab('parts');
+      setFeedbackBanner({
+        type: 'success',
+        message: reversePayment
+          ? 'Pagamento estornado e OS reaberta para edição! Ajuste as peças e valores e clique em "Concluir OS e Liberar para Financeiro" ao finalizar.'
+          : 'OS reaberta para conferência administrativa! Lance as peças e valores de manutenção e clique em "Concluir OS e Liberar para Financeiro" ao finalizar.',
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao reabrir a Ordem de Serviço.');
+    } finally {
+      setReopening(false);
+    }
   }
 
   const [canceling, setCanceling] = useState(false);
 
   async function cancelOS() {
-    if (!window.confirm("Tem certeza que deseja cancelar esta Ordem de Serviço? Esta ação não pode ser desfeita e os lançamentos serão ajustados.")) return;
+    if (!window.confirm('Tem certeza que deseja cancelar esta Ordem de Serviço? Esta ação não pode ser desfeita e os lançamentos serão ajustados.')) return;
     setCanceling(true);
 
     try {
-      const wasConcluded = order.status === 'Concluída';
-      
+      const prevStatus = order.status || loadedStatus;
+      const orderNumPadded = String(order.order_number ?? 0).padStart(4, '0');
+
       await supabase.from('service_orders').update({
         status: 'Cancelada',
         status_financeiro: 'cancelada',
         updated_at: new Date().toISOString(),
       }).eq('id', orderId);
 
-      if (wasConcluded) {
-        for (const part of parts) {
-          if (part.product_id) {
-            const prod = stockProducts.find(p => p.id === part.product_id);
-            if (prod) {
-              const after = prod.stock_quantity + part.quantity;
-              await supabase.from('products')
-                .update({ stock_quantity: after })
-                .eq('id', part.product_id);
-                
-              await supabase.from('stock_movements').insert({
-                product_id: part.product_id,
-                product_name: prod.name,
-                movement_type: 'entrada',
-                quantity: part.quantity,
-                quantity_before: prod.stock_quantity,
-                quantity_after: after,
-                reason: `Retorno por cancelamento de OS #${order?.order_number}`,
-                responsible: 'Sistema OS'
-              });
-            }
-          }
-        }
-      }
+      // Reverses ONLY stock that was actually deducted by this OS
+      const reversedCount = await reverseOrderStockDeductions({
+        orderId,
+        orderNumber: order.order_number ?? 0,
+        responsible: operatorName,
+        reason: `Retorno por cancelamento de OS #${orderNumPadded}`,
+      });
 
       await supabase.from('boletos')
-        .update({ status: 'vencido', notes: `Boleto cancelado devido ao cancelamento da OS #${order?.order_number}` })
+        .update({ status: 'vencido', notes: `Boleto cancelado devido ao cancelamento da OS #${orderNumPadded}` })
         .eq('service_order_id', orderId)
         .neq('status', 'pago');
+
+      await logOsStageTransition({
+        orderId,
+        fromStatus: prevStatus,
+        toStatus: 'Cancelada',
+        userName: operatorName,
+        userId: profile?.id,
+        notes: 'OS cancelada pelo operador administrativo',
+      });
+
+      await logFinancialAudit({
+        actionType: 'update',
+        tableName: 'service_orders',
+        recordId: orderId,
+        userName: operatorName,
+        changes: {
+          action: 'cancel_os',
+          previous_status: prevStatus,
+          stock_products_reversed: reversedCount,
+        },
+      });
 
       await loadOrder();
     } catch (err) {
       console.error(err);
-      alert("Erro ao cancelar a Ordem de Serviço.");
+      alert('Erro ao cancelar a Ordem de Serviço.');
     } finally {
       setCanceling(false);
     }
@@ -877,9 +1170,23 @@ ${attachments.length > 0 ? `
       )
     : customers.slice(0, 10);
 
+  const isAwaitingReview = order.status === 'Aguardando Conferência';
   const isConcluida = order.status === 'Concluída';
   const isCanceled = order.status === 'Cancelada';
+  const isPaid = order.status_financeiro === 'pago' || Boolean(order.paid_at);
   const isReadOnly = isConcluida || isCanceled;
+  const financials = calculateOrderFinancials(parts, order.labor_cost, false);
+  const isIncompleteConcluded =
+    isConcluida &&
+    !isPaid &&
+    ((financials.grandTotal === 0 && !order.warranty_type) || !(order.diagnosis ?? '').trim());
+  const unpaidBoletosCount = orderBoletos.filter(b => b.status !== 'pago').length;
+
+  function openReopenModal(mode: 'reopen' | 'reverse_payment') {
+    setReopenReason('');
+    setReopenConfirmChecked(false);
+    setReopenModalMode(mode);
+  }
 
   if (loading) {
     return (
@@ -903,9 +1210,23 @@ ${attachments.length > 0 ? `
             <ArrowLeft size={20} />
           </button>
           <div className="flex-1 min-w-0">
-            <h1 className="text-lg font-bold text-slate-800">
-              {isNew ? 'Nova OS' : `OS #${String(order.order_number ?? 0).padStart(4, '0')}`}
-            </h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg font-bold text-slate-800">
+                {isNew ? 'Nova OS' : `OS #${String(order.order_number ?? 0).padStart(4, '0')}`}
+              </h1>
+              {!isNew && isAwaitingReview && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">
+                  <ClipboardCheck size={12} />
+                  Aguardando Conferência
+                </span>
+              )}
+              {!isNew && isConcluida && isPaid && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                  <CheckCircle2 size={12} />
+                  Paga no Financeiro
+                </span>
+              )}
+            </div>
             {selectedCustomer && (
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 truncate">
                 <p className="text-sm text-slate-500 truncate">{selectedCustomer.name} · {selectedCustomer.city}</p>
@@ -917,7 +1238,7 @@ ${attachments.length > 0 ? `
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {!isNew && (
               <button
                 onClick={exportPDF}
@@ -926,6 +1247,34 @@ ${attachments.length > 0 ? `
               >
                 <Download size={14} />
                 <span className="hidden sm:inline">PDF</span>
+              </button>
+            )}
+            {!isNew && isAwaitingReview && (
+              <button
+                onClick={finalizeOS}
+                disabled={finalizing}
+                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-semibold transition-colors"
+              >
+                {finalizing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                <span className="hidden sm:inline">Concluir → Financeiro</span>
+              </button>
+            )}
+            {!isNew && isConcluida && isAdmin && !isPaid && (
+              <button
+                onClick={() => openReopenModal('reopen')}
+                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
+              >
+                <RotateCcw size={14} />
+                <span>Reabrir OS</span>
+              </button>
+            )}
+            {!isNew && isConcluida && isAdmin && isPaid && (
+              <button
+                onClick={() => openReopenModal('reverse_payment')}
+                className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
+              >
+                <ShieldAlert size={14} />
+                <span className="hidden sm:inline">Estornar e Reabrir</span>
               </button>
             )}
             {!isReadOnly && (
@@ -962,6 +1311,96 @@ ${attachments.length > 0 ? `
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
+        {feedbackBanner && (
+          <div className={`max-w-2xl mb-4 rounded-xl p-3.5 border flex items-start justify-between gap-3 text-sm ${
+            feedbackBanner.type === 'warning'
+              ? 'bg-amber-50 border-amber-300 text-amber-900'
+              : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+          }`}>
+            <div className="flex items-start gap-2.5">
+              {feedbackBanner.type === 'warning'
+                ? <AlertCircle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                : <CheckCircle2 size={18} className="text-emerald-600 flex-shrink-0 mt-0.5" />}
+              <p className="font-medium leading-snug">{feedbackBanner.message}</p>
+            </div>
+            <button
+              onClick={() => setFeedbackBanner(null)}
+              className="p-1 rounded-lg hover:bg-black/5 flex-shrink-0"
+              aria-label="Fechar aviso"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
+
+        {isAwaitingReview && (
+          <div className="max-w-2xl mb-4 bg-indigo-50 border border-indigo-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-start gap-3 text-indigo-900">
+              <ClipboardCheck size={20} className="text-indigo-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-sm">Aguardando Conferência Administrativa</p>
+                <p className="text-xs text-indigo-700 mt-0.5">
+                  Revise o diagnóstico, lance peças de estoque e valores de manutenção na aba <strong>Peças</strong> e clique em concluir para liberar ao Financeiro.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={finalizeOS}
+              disabled={finalizing}
+              className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-xs font-bold transition-colors flex-shrink-0"
+            >
+              {finalizing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              Concluir e Enviar ao Financeiro
+            </button>
+          </div>
+        )}
+
+        {isIncompleteConcluded && (
+          <div className="max-w-2xl mb-4 bg-red-50 border border-red-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-start gap-3 text-red-900">
+              <AlertCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-sm">OS encerrada sem valores ou sem diagnóstico completo</p>
+                <p className="text-xs text-red-700 mt-0.5">
+                  Reabra esta OS para lançar peças, mão de obra e diagnóstico antes de faturar no módulo Financeiro.
+                </p>
+              </div>
+            </div>
+            {isAdmin && (
+              <button
+                onClick={() => openReopenModal('reopen')}
+                className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-colors flex-shrink-0"
+              >
+                <RotateCcw size={14} />
+                Reabrir para Ajustar
+              </button>
+            )}
+          </div>
+        )}
+
+        {isConcluida && isPaid && (
+          <div className="max-w-2xl mb-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3 text-emerald-900">
+              <ShieldAlert size={20} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-sm">OS Quitada no Financeiro — Edição de valores bloqueada</p>
+                <p className="text-xs text-emerald-700 mt-0.5">
+                  Pagamento registrado em {formatDateTime(order.paid_at ?? null)}{order.payment_method ? ` (${order.payment_method})` : ''}. Para alterar peças ou valores, estorne o pagamento e reabra a OS.
+                </p>
+              </div>
+            </div>
+            {isAdmin && (
+              <button
+                onClick={() => openReopenModal('reverse_payment')}
+                className="flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-colors flex-shrink-0"
+              >
+                <RotateCcw size={14} />
+                Estornar e Reabrir
+              </button>
+            )}
+          </div>
+        )}
+
         {isCanceled && (
           <div className="max-w-2xl mx-auto mb-4 bg-red-600 text-white font-extrabold text-center py-3.5 px-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 uppercase tracking-widest text-xs border border-red-700 animate-pulse">
             <AlertCircle size={16} />
@@ -1070,7 +1509,15 @@ ${attachments.length > 0 ? `
                   onChange={e => setOrder(o => ({ ...o, status: e.target.value }))}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:bg-slate-50 disabled:text-slate-400"
                 >
-                  {STATUSES.map(s => <option key={s}>{s}</option>)}
+                  {STATUSES.map(s => (
+                    <option
+                      key={s}
+                      value={s}
+                      disabled={!isReadOnly && (s === 'Concluída' || s === 'Cancelada') && order.status !== s}
+                    >
+                      {s}{!isReadOnly && (s === 'Concluída' || s === 'Cancelada') && order.status !== s ? ' (use a aba Acerto Financeiro)' : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -1616,13 +2063,21 @@ ${attachments.length > 0 ? `
 
             {!isNew && !isReadOnly && (
               <div className="flex flex-col gap-2.5">
+                {unpaidBoletosCount > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 flex items-start gap-2">
+                    <AlertCircle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                    <span>
+                      Existem <strong>{unpaidBoletosCount}</strong> boleto(s) em aberto vinculados a esta OS. Ao concluir, o valor do boleto será sincronizado automaticamente para <strong>R$ {financials.grandTotal.toFixed(2)}</strong>.
+                    </span>
+                  </div>
+                )}
                 <button
                   onClick={finalizeOS}
                   disabled={finalizing}
                   className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white py-3 rounded-xl font-semibold text-sm transition-colors"
                 >
                   {finalizing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                  Concluir OS Operacionalmente
+                  Concluir OS e Liberar para Financeiro
                 </button>
                 <button
                   onClick={cancelOS}
@@ -1642,19 +2097,54 @@ ${attachments.length > 0 ? `
                   <div>
                     <p className="font-semibold text-sm">OS Concluída Operacionalmente</p>
                     <p className="text-xs mt-0.5">
-                      Serviço encerrado em {formatDateTime((order as { data_conclusao?: string }).data_conclusao ?? order.updated_at ?? null)}.
+                      Serviço encerrado em {formatDateTime(order.data_conclusao ?? order.updated_at ?? null)}.
                     </p>
                   </div>
                 </div>
-                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800">
-                  <CreditCard size={20} className="flex-shrink-0 mt-0.5 text-amber-500" />
-                  <div>
-                    <p className="font-semibold text-sm">Pagamento pendente no módulo Financeiro</p>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      O pagamento desta OS deve ser registrado no módulo <strong>Financeiro</strong> — acesse pelo menu lateral para registrar a forma de pagamento, emitir boleto ou marcar como pago.
-                    </p>
+
+                {isPaid ? (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-3">
+                    <div className="flex items-start gap-3 text-emerald-800">
+                      <CreditCard size={20} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+                      <div>
+                        <p className="font-semibold text-sm">Pagamento Quitado no Financeiro</p>
+                        <p className="text-xs text-emerald-700 mt-0.5">
+                          Pago em {formatDateTime(order.paid_at ?? null)}{order.payment_method ? ` via ${order.payment_method}` : ''}. A edição direta de peças e valores fica bloqueada enquanto o pagamento estiver confirmado.
+                        </p>
+                      </div>
+                    </div>
+                    {isAdmin && (
+                      <button
+                        onClick={() => openReopenModal('reverse_payment')}
+                        className="w-full flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 text-white py-2.5 rounded-xl font-semibold text-sm transition-colors"
+                      >
+                        <ShieldAlert size={16} />
+                        Estornar Pagamento e Reabrir OS
+                      </button>
+                    )}
                   </div>
-                </div>
+                ) : (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                    <div className="flex items-start gap-3 text-amber-800">
+                      <CreditCard size={20} className="flex-shrink-0 mt-0.5 text-amber-500" />
+                      <div>
+                        <p className="font-semibold text-sm">Pagamento pendente no módulo Financeiro</p>
+                        <p className="text-xs text-amber-700 mt-0.5">
+                          O pagamento desta OS deve ser registrado no módulo <strong>Financeiro</strong>. Caso precise lançar peças, corrigir valores de manutenção ou ajustar o diagnóstico, reabra a OS abaixo.
+                        </p>
+                      </div>
+                    </div>
+                    {isAdmin && (
+                      <button
+                        onClick={() => openReopenModal('reopen')}
+                        className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl font-semibold text-sm transition-colors"
+                      >
+                        <RotateCcw size={16} />
+                        Reabrir OS para Edição Administrativa
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1676,24 +2166,79 @@ ${attachments.length > 0 ? `
 
         {/* HISTORY TAB */}
         {tab === 'history' && (
-          <div className="space-y-3 max-w-2xl">
-            {history.length === 0 ? (
-              <div className="text-center py-12 text-slate-400">
-                <History size={32} className="mx-auto mb-2 opacity-30" />
-                <p>Nenhum histórico encontrado</p>
-              </div>
-            ) : (
-              history.map(h => (
-                <div key={h.id} className="bg-white rounded-xl border border-slate-200 p-4">
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <p className="font-semibold text-sm text-slate-800">{h.subject}</p>
-                    <span className="text-xs text-slate-400 flex-shrink-0">{formatDateTime(h.contacted_at)}</span>
-                  </div>
-                  <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">{h.contact_type}</p>
-                  {h.details && <p className="text-sm text-slate-600">{h.details}</p>}
+          <div className="space-y-6 max-w-2xl">
+            {/* OS Stage & Audit History */}
+            <div className="space-y-2.5">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Histórico de Etapas e Auditoria da OS ({stageHistory.length})
+              </h3>
+              {stageHistory.length === 0 ? (
+                <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-slate-400 text-sm">
+                  Nenhuma movimentação de etapa registrada para esta OS.
                 </div>
-              ))
-            )}
+              ) : (
+                stageHistory.map(sh => (
+                  <div key={sh.id} className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between gap-2 flex-wrap mb-1.5">
+                      <div className="flex items-center gap-2 text-xs font-semibold">
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          {sh.from_status || 'Abertura'}
+                        </span>
+                        <ArrowRight size={12} className="text-amber-500" />
+                        <span className={`px-2 py-0.5 rounded-full font-bold ${
+                          sh.to_status === 'Concluída'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : sh.to_status === 'Aguardando Conferência'
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : sh.to_status === 'Cancelada'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {sh.to_status}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-400 flex items-center gap-1">
+                        <Clock size={11} />
+                        {formatDateTime(sh.created_at)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                      <User size={12} className="text-slate-400" />
+                      <span className="font-medium text-slate-700">{sh.changed_by_name || 'Sistema'}</span>
+                    </p>
+                    {sh.notes && (
+                      <p className="text-sm text-slate-600 mt-1.5 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                        {sh.notes}
+                      </p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Customer Contact History */}
+            <div className="space-y-2.5">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Histórico de Contatos do Cliente ({history.length})
+              </h3>
+              {history.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 bg-white rounded-xl border border-slate-200">
+                  <History size={28} className="mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">Nenhum contato registrado para este cliente</p>
+                </div>
+              ) : (
+                history.map(h => (
+                  <div key={h.id} className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <p className="font-semibold text-sm text-slate-800">{h.subject}</p>
+                      <span className="text-xs text-slate-400 flex-shrink-0">{formatDateTime(h.contacted_at)}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">{h.contact_type}</p>
+                    {h.details && <p className="text-sm text-slate-600">{h.details}</p>}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1799,6 +2344,127 @@ ${attachments.length > 0 ? `
           </div>
         </div>
       )}
+
+      {/* Reopen / Reverse Payment Modal */}
+      {reopenModalMode && (() => {
+        const isReverse = reopenModalMode === 'reverse_payment';
+        const minChars = isReverse ? 10 : 5;
+        const reasonValid = reopenReason.trim().length >= minChars;
+        const canSubmit = !reopening && reasonValid && (!isReverse || reopenConfirmChecked);
+        return (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+              <div className={`px-6 py-4 flex items-center justify-between text-white ${isReverse ? 'bg-amber-600' : 'bg-indigo-600'}`}>
+                <div className="flex items-center gap-2">
+                  {isReverse ? <ShieldAlert size={20} /> : <RotateCcw size={20} />}
+                  <h3 className="font-bold text-base">
+                    {isReverse ? 'Estornar Pagamento e Reabrir OS' : 'Reabrir OS para Edição'}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setReopenModalMode(null)}
+                  disabled={reopening}
+                  className="text-white/80 hover:text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className={`rounded-xl p-3.5 text-xs border ${
+                  isReverse
+                    ? 'bg-red-50 border-red-200 text-red-900'
+                    : 'bg-indigo-50 border-indigo-200 text-indigo-900'
+                }`}>
+                  {isReverse ? (
+                    <p>
+                      <strong>Atenção financeira:</strong> esta OS está marcada como <strong>Paga</strong>. Ao confirmar, o pagamento será estornado (<code>status_financeiro = pendente</code>, <code>paid_at = null</code>), eventual baixa de estoque desta OS será revertida com segurança, e a ação ficará gravada na <strong>Auditoria Financeira</strong>.
+                    </p>
+                  ) : (
+                    <p>
+                      A OS voltará para <strong>Aguardando Conferência</strong> totalmente destravada para você lançar peças, mão de obra e diagnóstico. Se houve baixa de estoque anteriormente, ela será estornada automaticamente (sem gerar estoque fantasma se fechada pelo técnico).
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 block mb-1.5">Atalhos rápidos de motivo</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {REOPEN_QUICK_REASONS.map(q => (
+                      <button
+                        key={q}
+                        type="button"
+                        onClick={() => setReopenReason(q)}
+                        className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+                          reopenReason === q
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 block mb-1.5">
+                    Justificativa obrigatória <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={reopenReason}
+                    onChange={e => setReopenReason(e.target.value)}
+                    placeholder={isReverse
+                      ? 'Explique o motivo do estorno e ajuste de valores (mín. 10 caracteres)...'
+                      : 'Informe o motivo da reabertura (mín. 5 caracteres)...'}
+                    className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
+                  />
+                  {!reasonValid && reopenReason.length > 0 && (
+                    <p className="text-xs text-red-600 mt-1">
+                      Informe pelo menos {minChars} caracteres na justificativa.
+                    </p>
+                  )}
+                </div>
+
+                {isReverse && (
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={reopenConfirmChecked}
+                      onChange={e => setReopenConfirmChecked(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-amber-600"
+                    />
+                    <span className="text-xs text-amber-900 font-medium leading-snug">
+                      Confirmo o estorno do pagamento registrado e estou ciente de que a OS precisará ser concluída e baixada novamente no Financeiro.
+                    </span>
+                  </label>
+                )}
+              </div>
+
+              <div className="bg-slate-50 px-6 py-4 flex gap-3 justify-end border-t border-slate-100">
+                <button
+                  onClick={() => setReopenModalMode(null)}
+                  disabled={reopening}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleConfirmReopen}
+                  disabled={!canSubmit}
+                  className={`px-4 py-2 text-sm font-semibold text-white rounded-lg disabled:opacity-50 transition-colors flex items-center gap-1.5 shadow-sm ${
+                    isReverse ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                  }`}
+                >
+                  {reopening ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
+                  {isReverse ? 'Confirmar Estorno e Reabrir' : 'Confirmar Reabertura'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

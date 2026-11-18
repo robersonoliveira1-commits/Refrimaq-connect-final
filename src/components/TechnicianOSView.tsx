@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   Wrench, LogOut, Loader2, ChevronLeft, Clock, CheckCircle2,
   AlertTriangle, Camera, X, Save, FileText, Package, ArrowRight, History,
-  MapPin, Phone, User, Wifi, WifiOff, Plus, Trash2, Upload, Edit2, Shield, RefreshCw, Download, Search,
+  MapPin, User, Wifi, WifiOff, Plus, Trash2, Shield, RefreshCw, Download, Search,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
@@ -63,33 +63,27 @@ interface StageHistoryEntry {
 
 // ─── Stage flow ───────────────────────────────────────────────────────────────
 
-const TECH_STAGES = [
-  'Triagem',
-  'Em Diagnóstico',
-  'Aguardando Aprovação',
-  'Em Manutenção',
-  'Concluída',
-];
-
 // Stages a technician can advance to from a given status
+// Technicians finish technical work into 'Aguardando Conferência'; only admin concludes OS for Finance
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   'Triagem':               ['Em Diagnóstico'],
   'Em Diagnóstico':        ['Aguardando Aprovação', 'Em Manutenção'],
   'Aguardando Orçamento':  ['Em Manutenção'],
   'Aguardando Aprovação':  ['Em Manutenção'],
   'Aguardando Peças':      ['Em Manutenção'],
-  'Em Manutenção':         ['Concluída'],
+  'Em Manutenção':         ['Aguardando Conferência'],
 };
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
-  'Triagem':               { color: 'text-slate-600',  bg: 'bg-slate-100',  label: 'Triagem' },
-  'Em Diagnóstico':        { color: 'text-blue-700',   bg: 'bg-blue-100',   label: 'Em Diagnóstico' },
-  'Aguardando Aprovação':  { color: 'text-amber-700',  bg: 'bg-amber-100',  label: 'Aguardando Aprovação' },
-  'Aguardando Orçamento':  { color: 'text-amber-700',  bg: 'bg-amber-100',  label: 'Aguardando Orçamento' },
-  'Aguardando Peças':      { color: 'text-orange-700', bg: 'bg-orange-100', label: 'Aguardando Peças' },
-  'Em Manutenção':         { color: 'text-orange-700', bg: 'bg-orange-100', label: 'Em Manutenção' },
-  'Concluída':             { color: 'text-green-700',  bg: 'bg-green-100',  label: 'Concluída' },
-  'Cancelada':             { color: 'text-red-700',    bg: 'bg-red-100',    label: 'Cancelada' },
+  'Triagem':                { color: 'text-slate-600',  bg: 'bg-slate-100',  label: 'Triagem' },
+  'Em Diagnóstico':         { color: 'text-blue-700',   bg: 'bg-blue-100',   label: 'Em Diagnóstico' },
+  'Aguardando Aprovação':   { color: 'text-amber-700',  bg: 'bg-amber-100',  label: 'Aguardando Aprovação' },
+  'Aguardando Orçamento':   { color: 'text-amber-700',  bg: 'bg-amber-100',  label: 'Aguardando Orçamento' },
+  'Aguardando Peças':       { color: 'text-orange-700', bg: 'bg-orange-100', label: 'Aguardando Peças' },
+  'Em Manutenção':          { color: 'text-orange-700', bg: 'bg-orange-100', label: 'Em Manutenção' },
+  'Aguardando Conferência': { color: 'text-indigo-700', bg: 'bg-indigo-100', label: 'Aguardando Conferência' },
+  'Concluída':              { color: 'text-green-700',  bg: 'bg-green-100',  label: 'Concluída' },
+  'Cancelada':              { color: 'text-red-700',    bg: 'bg-red-100',    label: 'Cancelada' },
 };
 
 type View = 'list' | 'detail';
@@ -132,7 +126,7 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
     let query = supabase
       .from('service_orders')
       .select('*, customers(name,phone,address,city), user_profiles(full_name)')
-      .not('status', 'in', '("Concluída","Cancelada")')
+      .not('status', 'in', '("Aguardando Conferência","Concluída","Cancelada")')
       .order('created_at', { ascending: false });
 
     if (isTechnician && profile?.id) {
@@ -157,8 +151,8 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
   function handleStatusChanged(orderId: string, newStatus: string) {
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
     if (selectedOrder?.id === orderId) setSelectedOrder(o => o ? { ...o, status: newStatus } : o);
-    // If order is now Concluída/Cancelada, remove from list and go back
-    if (['Concluída', 'Cancelada'].includes(newStatus)) {
+    // If order is now Aguardando Conferência / Concluída / Cancelada, remove from tech queue and go back
+    if (['Aguardando Conferência', 'Concluída', 'Cancelada'].includes(newStatus)) {
       setOrders(prev => prev.filter(o => o.id !== orderId));
       setView('list');
     }
@@ -285,6 +279,7 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
               'Aguardando Orçamento':  'from-amber-50 to-amber-100/70 text-amber-800',
               'Aguardando Peças':      'from-orange-50 to-amber-100/60 text-orange-800',
               'Em Manutenção':         'from-orange-50 to-red-100/60 text-orange-800',
+              'Aguardando Conferência': 'from-indigo-50 to-purple-100/70 text-indigo-800',
               'Concluída':             'from-emerald-50 to-green-100/70 text-emerald-800',
             };
             const leftBg = gradientMap[order.status] ?? 'from-slate-100 to-slate-200/70 text-slate-700';
@@ -391,7 +386,7 @@ interface DetailProps {
   embedded?: boolean;
 }
 
-function OSDetailView({ order, profile, companyConfig, onBack, onStatusChanged, online, embedded }: DetailProps) {
+function OSDetailView({ order, profile, companyConfig, onBack, onStatusChanged }: DetailProps) {
   const [parts, setParts] = useState<OSPart[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
@@ -434,16 +429,28 @@ function OSDetailView({ order, profile, companyConfig, onBack, onStatusChanged, 
   }
 
   async function advanceStage(toStatus: string) {
+    const isTechnicalFinish = toStatus === 'Aguardando Conferência';
+    const trimmedDiagnosis = diagnosis.trim();
+
+    if (isTechnicalFinish && trimmedDiagnosis.length < 5) {
+      return;
+    }
+
     setAdvancingTo(toStatus);
     const now = new Date().toISOString();
-    await supabase.from('service_orders').update({ status: toStatus, updated_at: now }).eq('id', order.id);
+    const updatePayload: Record<string, unknown> = { status: toStatus, updated_at: now };
+    if (trimmedDiagnosis) {
+      updatePayload.diagnosis = trimmedDiagnosis;
+    }
+
+    await supabase.from('service_orders').update(updatePayload).eq('id', order.id);
     await supabase.from('os_stage_history').insert({
       service_order_id: order.id,
       from_status: order.status,
       to_status: toStatus,
       changed_by_name: profile?.full_name ?? 'Técnico',
       changed_by_id: profile?.id ?? null,
-      notes: advanceNote,
+      notes: advanceNote || (isTechnicalFinish ? 'Serviço técnico finalizado — enviado para conferência administrativa' : ''),
     });
     setAdvancingTo(null);
     setShowAdvanceModal(null);
@@ -855,34 +862,82 @@ ${cfg.pdf_footer ? `<div style="margin-top:12px;font-size:11px;color:#64748b;pad
       </div>
 
       {/* Advance stage modal */}
-      {showAdvanceModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
-            <div className="px-5 pt-5 pb-3">
-              <h2 className="font-bold text-slate-800 text-lg mb-1 flex items-center gap-2">
-                <ArrowRight size={18} className="text-amber-500" /> Avançar Etapa
-              </h2>
-              <p className="text-sm text-slate-500">
-                <span className="font-semibold">{order.status}</span> → <span className="font-bold text-amber-600">{showAdvanceModal}</span>
-              </p>
-            </div>
-            <div className="px-5 pb-3">
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Observação (opcional)</label>
-              <textarea rows={3} value={advanceNote} onChange={e => setAdvanceNote(e.target.value)}
-                placeholder="Informe o motivo ou observações desta mudança..."
-                className="w-full text-sm border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-amber-500/30 resize-none" />
-            </div>
-            <div className="px-5 pb-5 flex gap-3">
-              <button onClick={() => setShowAdvanceModal(null)} className="flex-1 border border-slate-200 text-slate-600 py-3 rounded-xl text-sm font-medium">Cancelar</button>
-              <button onClick={() => advanceStage(showAdvanceModal)} disabled={!!advancingTo}
-                className="flex-1 flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white py-3 rounded-xl text-sm font-bold active:scale-[0.98]">
-                {advancingTo ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                Confirmar
-              </button>
+      {showAdvanceModal && (() => {
+        const isTechnicalFinish = showAdvanceModal === 'Aguardando Conferência';
+        const diagnosisValid = diagnosis.trim().length >= 5;
+        const canConfirm = !advancingTo && (!isTechnicalFinish || diagnosisValid);
+        return (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4">
+            <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+              <div className="px-5 pt-5 pb-3">
+                <h2 className="font-bold text-slate-800 text-lg mb-1 flex items-center gap-2">
+                  <ArrowRight size={18} className="text-amber-500" />
+                  {isTechnicalFinish ? 'Enviar para Conferência' : 'Avançar Etapa'}
+                </h2>
+                <p className="text-sm text-slate-500">
+                  <span className="font-semibold">{order.status}</span> →{' '}
+                  <span className={`font-bold ${isTechnicalFinish ? 'text-indigo-600' : 'text-amber-600'}`}>
+                    {showAdvanceModal}
+                  </span>
+                </p>
+              </div>
+              <div className="px-5 pb-3 space-y-3 overflow-y-auto">
+                {isTechnicalFinish && (
+                  <>
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-xs text-indigo-800">
+                      A OS será enviada ao <strong>administrativo</strong> para lançamento final de peças, valores e liberação ao Financeiro.
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-slate-600 block mb-1.5">
+                        Diagnóstico / Serviço Realizado <span className="text-red-500">*</span>
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={diagnosis}
+                        onChange={e => setDiagnosis(e.target.value)}
+                        placeholder="Descreva o defeito encontrado, procedimentos executados e peças trocadas..."
+                        className={`w-full text-sm border rounded-xl p-3 focus:outline-none focus:ring-2 resize-none ${
+                          diagnosisValid
+                            ? 'border-slate-200 focus:ring-amber-500/30'
+                            : 'border-red-300 bg-red-50/30 focus:ring-red-400/30'
+                        }`}
+                      />
+                      {!diagnosisValid && (
+                        <p className="text-xs text-red-600 font-medium mt-1 flex items-center gap-1">
+                          <AlertTriangle size={12} />
+                          Obrigatório preencher o diagnóstico (mínimo 5 caracteres) antes de encerrar.
+                        </p>
+                      )}
+                    </div>
+                    {parts.length === 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-800 flex items-start gap-2">
+                        <AlertTriangle size={14} className="flex-shrink-0 mt-0.5 text-amber-500" />
+                        <span>Nenhuma peça foi indicada nesta OS. Se houve troca de peças, adicione na aba Peças ou descreva no diagnóstico acima.</span>
+                      </div>
+                    )}
+                  </>
+                )}
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 block mb-1.5">Observação adicional (opcional)</label>
+                  <textarea rows={2} value={advanceNote} onChange={e => setAdvanceNote(e.target.value)}
+                    placeholder="Informe observações extras para a conferência..."
+                    className="w-full text-sm border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-amber-500/30 resize-none" />
+                </div>
+              </div>
+              <div className="px-5 pb-5 pt-2 flex gap-3 border-t border-slate-100">
+                <button onClick={() => setShowAdvanceModal(null)} className="flex-1 border border-slate-200 text-slate-600 py-3 rounded-xl text-sm font-medium">Cancelar</button>
+                <button onClick={() => advanceStage(showAdvanceModal)} disabled={!canConfirm}
+                  className={`flex-1 flex items-center justify-center gap-2 disabled:opacity-50 text-white py-3 rounded-xl text-sm font-bold active:scale-[0.98] ${
+                    isTechnicalFinish ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-amber-500 hover:bg-amber-600'
+                  }`}>
+                  {advancingTo ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  Confirmar
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

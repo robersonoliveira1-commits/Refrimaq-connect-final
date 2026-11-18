@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, FileText, Share2, Tag, ChevronLeft, ChevronRight, CheckCircle2, Loader2, DollarSign } from 'lucide-react';
+import { X, FileText, Share2, Tag, ChevronLeft, ChevronRight, Loader2, DollarSign, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UsedItem } from '../lib/types';
 import { generateUsedItemPDF } from '../utils/usedItemPdf';
@@ -19,6 +19,7 @@ export default function UsedItemDetailsModal({ item, onClose, onUpdate }: Props)
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const priceToUse = item.promotional_price || item.price;
 
@@ -65,6 +66,29 @@ export default function UsedItemDetailsModal({ item, onClose, onUpdate }: Props)
       alert('Erro ao gerar PDF.');
     } finally {
       setGeneratingPDF(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm(`Tem certeza que deseja deletar "${item.name}"? Esta ação não pode ser desfeita.`)) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase.from('used_items').delete().eq('id', item.id);
+      if (error) {
+        if (error.code === '23503') {
+          alert('Não é possível deletar este item pois ele já possui uma venda registrada.');
+        } else {
+          alert('Erro ao deletar item.');
+        }
+        return;
+      }
+      onUpdate();
+      onClose();
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao deletar item.');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -178,26 +202,33 @@ export default function UsedItemDetailsModal({ item, onClose, onUpdate }: Props)
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-100 flex gap-3 bg-white">
+        <div className="px-6 py-4 border-t border-slate-100 flex flex-wrap gap-3 bg-white">
           <button onClick={handleShareWhatsApp}
-            className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#20bd5a] text-white rounded-xl text-sm font-semibold transition-colors">
+            className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#20bd5a] text-white py-2.5 px-3 rounded-xl text-sm font-semibold transition-colors">
             <Share2 size={16} />
             Compartilhar
           </button>
           
           <button onClick={handleGeneratePDF} disabled={generatingPDF}
-            className="flex-1 flex justify-center items-center gap-2 border-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 rounded-xl text-sm font-semibold transition-colors">
+            className="flex-1 flex justify-center items-center gap-2 border-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 py-2.5 px-3 rounded-xl text-sm font-semibold transition-colors">
             {generatingPDF ? <Loader2 className="animate-spin" size={16} /> : <FileText size={16} />}
             Gerar Folder
           </button>
           
           {item.status === 'Disponível' && (
             <button onClick={() => setShowSellDialog(true)}
-              className="flex-1 flex justify-center items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold transition-colors">
+              className="flex-1 flex justify-center items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 px-3 rounded-xl text-sm font-semibold transition-colors">
               <DollarSign size={16} />
               Vender
             </button>
           )}
+
+          <button onClick={handleDelete} disabled={deleting}
+            className="flex justify-center items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 py-2.5 px-4 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50"
+            title="Deletar item">
+            {deleting ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+            Deletar
+          </button>
         </div>
       </div>
 

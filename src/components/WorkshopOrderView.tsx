@@ -64,7 +64,6 @@ const VISIT_TYPES = ['Corretiva', 'Instalação', 'Assepsia', 'Preventiva'];
 const PRIORITIES = ['Baixa', 'Média', 'Alta', 'Urgente'];
 const STATUSES = ['Triagem', 'Aguardando Orçamento', 'Aguardando Peças', 'Em Manutenção', 'Concluída', 'Cancelada'];
 const PAYMENT_METHODS = ['Dinheiro', 'Pix', 'Cartão de Débito', 'Cartão de Crédito', 'Boleto', 'Transferência'];
-const MAX_PHOTOS = 5;
 
 interface Props {
   orderId: string;
@@ -594,22 +593,23 @@ export default function WorkshopOrderView({ orderId, onBack, onMenuClick, onSele
   }
 
   async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || isNew) return;
-    if (attachments.length >= MAX_PHOTOS) { alert(`Limite de ${MAX_PHOTOS} fotos por OS atingido.`); return; }
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0 || isNew) return;
     setUploadingPhoto(true);
     try {
-      const fileToUpload = await compressImageFile(file, 1200, 1200, 0.75);
-      const path = `${orderId}/${Date.now()}.jpg`;
-      const { error } = await supabase.storage.from('service-order-attachments').upload(path, fileToUpload, { upsert: true });
-      if (error) { alert('Erro ao enviar foto.'); setUploadingPhoto(false); return; }
-      const { data: urlData } = supabase.storage.from('service-order-attachments').getPublicUrl(path);
-      const { data: att } = await supabase
-        .from('service_order_attachments')
-        .insert({ service_order_id: orderId, photo_url: urlData.publicUrl })
-        .select('id,photo_url')
-        .single();
-      if (att) setAttachments(a => [...a, att as unknown as Attachment]);
+      for (const file of files) {
+        const fileToUpload = await compressImageFile(file, 1200, 1200, 0.75);
+        const path = `${orderId}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`;
+        const { error } = await supabase.storage.from('service-order-attachments').upload(path, fileToUpload, { upsert: true });
+        if (error) { alert(`Erro ao enviar foto "${file.name}".`); continue; }
+        const { data: urlData } = supabase.storage.from('service-order-attachments').getPublicUrl(path);
+        const { data: att } = await supabase
+          .from('service_order_attachments')
+          .insert({ service_order_id: orderId, photo_url: urlData.publicUrl })
+          .select('id,photo_url')
+          .single();
+        if (att) setAttachments(a => [...a, att as unknown as Attachment]);
+      }
     } catch (err) {
       console.error('Erro na compressao/upload da foto:', err);
       alert('Erro ao processar imagem.');
@@ -1327,19 +1327,17 @@ ${attachments.length > 0 ? `
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-slate-700">
                     Fotos do Atendimento
-                    <span className="ml-2 text-xs font-normal text-slate-400">{attachments.length}/{MAX_PHOTOS}</span>
+                    <span className="ml-2 text-xs font-normal text-slate-400">{attachments.length}</span>
                   </h3>
-                  {attachments.length < MAX_PHOTOS && (
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadingPhoto}
-                      className="flex items-center gap-1.5 text-xs font-medium text-amber-600 hover:text-amber-700 disabled:opacity-50"
-                    >
-                      {uploadingPhoto ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
-                      {uploadingPhoto ? 'Enviando...' : 'Adicionar foto'}
-                    </button>
-                  )}
-                  <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingPhoto}
+                    className="flex items-center gap-1.5 text-xs font-medium text-amber-600 hover:text-amber-700 disabled:opacity-50"
+                  >
+                    {uploadingPhoto ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
+                    {uploadingPhoto ? 'Enviando...' : 'Adicionar foto'}
+                  </button>
+                  <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handlePhotoUpload} />
                 </div>
 
                 {attachments.length === 0 && !uploadingPhoto && (
@@ -1348,7 +1346,7 @@ ${attachments.length > 0 ? `
                     className="w-full h-24 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center gap-1.5 text-slate-400 hover:border-amber-300 hover:text-amber-500 hover:bg-amber-50/50 transition-colors"
                   >
                     <Camera size={20} />
-                    <span className="text-xs">Clique para adicionar fotos (até {MAX_PHOTOS})</span>
+                    <span className="text-xs">Clique para adicionar fotos</span>
                   </button>
                 )}
 

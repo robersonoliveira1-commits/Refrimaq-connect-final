@@ -100,6 +100,7 @@ interface TechnicianOSViewProps { embedded?: boolean; }
 
 export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {}) {
   const { profile, signOut } = useAuth();
+  const isTechnician = profile?.role === 'technician';
   const [view, setView] = useState<View>('list');
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
@@ -110,7 +111,6 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    load();
     fetchCompanyConfig().then(setCompanyConfig);
     const handleOnline  = () => setOnline(true);
     const handleOffline = () => setOnline(false);
@@ -123,15 +123,31 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
   }, []);
 
   async function load() {
+    if (isTechnician && !profile?.id) {
+      setOrders([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const { data } = await supabase
+    let query = supabase
       .from('service_orders')
       .select('*, customers(name,phone,address,city), user_profiles(full_name)')
       .not('status', 'in', '("Concluída","Cancelada")')
       .order('created_at', { ascending: false });
+
+    if (isTechnician && profile?.id) {
+      query = query.eq('technician_id', profile.id);
+    }
+
+    const { data } = await query;
     setOrders((data as unknown as ServiceOrder[]) ?? []);
     setLoading(false);
   }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, isTechnician]);
 
   function openOrder(order: ServiceOrder) {
     setSelectedOrder(order);
@@ -150,7 +166,7 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
 
   const myOrders  = orders.filter(o => o.technician_id === profile?.id);
   const allOrders = orders;
-  const displayed = filterStatus === 'mine' ? myOrders : allOrders;
+  const displayed = isTechnician ? myOrders : (filterStatus === 'mine' ? myOrders : allOrders);
 
   const filteredOrders = displayed.filter(o => {
     if (!searchQuery) return true;
@@ -207,15 +223,22 @@ export default function TechnicianOSView({ embedded }: TechnicianOSViewProps = {
           </div>
         </div>
 
-        {/* Toggle mine / all */}
-        <div className="mt-3 flex gap-1 bg-white/10 rounded-xl p-1">
-          {(['mine', 'all'] as const).map(f => (
-            <button key={f} onClick={() => setFilterStatus(f)}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${filterStatus === f ? 'bg-white text-amber-600' : 'text-white/70'}`}>
-              {f === 'mine' ? `Minhas OS (${myOrders.length})` : `Todas (${allOrders.length})`}
-            </button>
-          ))}
-        </div>
+        {/* Toggle mine / all (admin preview only; technicians only see their own OS) */}
+        {!isTechnician ? (
+          <div className="mt-3 flex gap-1 bg-white/10 rounded-xl p-1">
+            {(['mine', 'all'] as const).map(f => (
+              <button key={f} onClick={() => setFilterStatus(f)}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${filterStatus === f ? 'bg-white text-amber-600' : 'text-white/70'}`}>
+                {f === 'mine' ? `Minhas OS (${myOrders.length})` : `Todas (${allOrders.length})`}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 flex items-center justify-between bg-white/15 rounded-xl px-3 py-1.5 text-xs font-semibold text-white">
+            <span>Minhas OS atribuídas</span>
+            <span className="bg-white text-amber-600 px-2 py-0.5 rounded-md">{myOrders.length}</span>
+          </div>
+        )}
 
         {/* Search bar */}
         <div className="mt-3 relative">

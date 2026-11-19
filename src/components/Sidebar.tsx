@@ -1,7 +1,7 @@
-import { LayoutDashboard, Users, BarChart3, Calendar, X, Map, UsersRound, LogOut, Database, Wrench, Banknote, Settings, Boxes, ShoppingCart } from 'lucide-react';
+import { LayoutDashboard, Users, BarChart3, Calendar, X, Map, UsersRound, LogOut, Database, Wrench, Banknote, Settings, Boxes, ShoppingCart, Globe } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 
-type Page = 'dashboard' | 'customers' | 'schedule' | 'reports' | 'logistics' | 'team' | 'backup' | 'workshop' | 'sales' | 'finance' | 'config' | 'parts';
+type Page = 'dashboard' | 'customers' | 'schedule' | 'reports' | 'logistics' | 'team' | 'backup' | 'workshop' | 'sales' | 'finance' | 'config' | 'parts' | 'site-catalog';
 
 interface SidebarProps {
   currentPage: Page;
@@ -18,8 +18,9 @@ const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = 
   { page: 'reports',   label: 'Relatórios',        icon: BarChart3 },
   { page: 'workshop',  label: 'Oficina',           icon: Wrench },
   { page: 'sales',     label: 'Venda de Usados',   icon: ShoppingCart },
-  { page: 'parts',     label: 'Peças e Serviços',  icon: Boxes },
-  { page: 'finance',   label: 'Financeiro',        icon: Banknote },
+  { page: 'parts',        label: 'Peças e Serviços',  icon: Boxes },
+  { page: 'site-catalog', label: 'Catálogo do Site',  icon: Globe },
+  { page: 'finance',      label: 'Financeiro',        icon: Banknote },
   { page: 'team',      label: 'Equipe',            icon: UsersRound },
   { page: 'backup',    label: 'Backup',            icon: Database },
   { page: 'config',    label: 'Configurações',     icon: Settings },

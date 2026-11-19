@@ -20,12 +20,13 @@ import WorkshopOrderView from './components/WorkshopOrderView';
 import FinancePage from './components/FinancePage';
 import ConfigPage from './components/ConfigPage';
 import PartsServicesPage from './components/PartsServicesPage';
+import SiteCatalogPage from './components/SiteCatalogPage';
 import TechnicianOSView from './components/TechnicianOSView';
 import UsedSalesPage from './components/UsedSalesPage';
 import PublicEquipmentView from './components/PublicEquipmentView';
 import { Customer } from './lib/types';
 
-type Page = 'dashboard' | 'customers' | 'schedule' | 'reports' | 'logistics' | 'team' | 'backup' | 'workshop' | 'finance' | 'sales' | 'config' | 'parts';
+type Page = 'dashboard' | 'customers' | 'schedule' | 'reports' | 'logistics' | 'team' | 'backup' | 'workshop' | 'finance' | 'sales' | 'config' | 'parts' | 'site-catalog';
 
 function AppContent() {
   const { user, profile, loading } = useAuth();
@@ -222,6 +223,10 @@ function AdminApp() {
 
         {page === 'parts' && (
           <PartsServicesPage onMenuClick={() => setSidebarOpen(true)} refresh={refresh} />
+        )}
+
+        {page === 'site-catalog' && (
+          <SiteCatalogPage onMenuClick={() => setSidebarOpen(true)} />
         )}
       </main>
 

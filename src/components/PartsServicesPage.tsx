@@ -395,13 +395,13 @@ function PecasTab({
       const path = `parts_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
       let publicUrl = '';
 
-      const primary = await supabase.storage.from('product-photos').upload(path, file, { upsert: true });
+      const primary = await supabase.storage.from('used-items-photos').upload(path, file, { upsert: true });
       if (!primary.error && primary.data) {
-        publicUrl = supabase.storage.from('product-photos').getPublicUrl(primary.data.path).data.publicUrl;
+        publicUrl = supabase.storage.from('used-items-photos').getPublicUrl(primary.data.path).data.publicUrl;
       } else {
-        const fallback = await supabase.storage.from('used-items-photos').upload(path, file, { upsert: true });
+        const fallback = await supabase.storage.from('product-photos').upload(path, file, { upsert: true });
         if (fallback.error || !fallback.data) throw fallback.error || new Error('Falha no upload');
-        publicUrl = supabase.storage.from('used-items-photos').getPublicUrl(fallback.data.path).data.publicUrl;
+        publicUrl = supabase.storage.from('product-photos').getPublicUrl(fallback.data.path).data.publicUrl;
       }
 
       setEditItem(prev => (prev ? { ...prev, photo_url: publicUrl } : prev));
@@ -433,12 +433,13 @@ function PecasTab({
     setFormError(null);
 
     const nowIso = new Date().toISOString();
-    const cleanDesc =
-      editItem.description && /^https?:\/\//i.test(editItem.description.trim())
-        ? (editItem.photo_url ? '' : '')
-        : (editItem.description ?? '');
+    const photoValue = (editItem.photo_url ?? '').trim();
+    const nonUrlDesc =
+      editItem.description && !/^https?:\/\//i.test(editItem.description.trim())
+        ? editItem.description
+        : '';
 
-    const payload = {
+    const basePayload = {
       internal_code: (editItem.internal_code ?? '').trim(),
       name: editItem.name.trim(),
       category: editItem.category || 'Outros',
@@ -450,15 +451,25 @@ function PecasTab({
       stock_min: Math.max(0, Math.round(Number(editItem.stock_min) || 0)),
       location: (editItem.location ?? '').trim(),
       part_notes: (editItem.part_notes ?? '').trim(),
-      photo_url: (editItem.photo_url ?? '').trim(),
-      description: cleanDesc,
       updated_at: nowIso,
     };
 
+    const supportsPhotoUrl = products.some(p => Object.prototype.hasOwnProperty.call(p, 'photo_url'));
+    const payloadWithPhotoUrl = { ...basePayload, photo_url: photoValue, description: nonUrlDesc };
+    const payloadLegacyDesc = { ...basePayload, description: photoValue || nonUrlDesc };
+
     if (isEditing && editItem.id) {
-      const { error } = await supabase.from('products').update(payload).eq('id', editItem.id);
-      if (error) {
-        setFormError(`Erro ao salvar peça: ${error.message}`);
+      let res = await supabase
+        .from('products')
+        .update(supportsPhotoUrl ? payloadWithPhotoUrl : payloadLegacyDesc)
+        .eq('id', editItem.id);
+
+      if (res.error && supportsPhotoUrl && res.error.message.includes('photo_url')) {
+        res = await supabase.from('products').update(payloadLegacyDesc).eq('id', editItem.id);
+      }
+
+      if (res.error) {
+        setFormError(`Erro ao salvar peça: ${res.error.message}`);
         setSaving(false);
         return;
       }
@@ -467,7 +478,7 @@ function PecasTab({
         const delta = newStock - originalStock;
         const { error: mvErr } = await supabase.from('stock_movements').insert({
           product_id: editItem.id,
-          product_name: payload.name,
+          product_name: basePayload.name,
           movement_type: 'ajuste',
           quantity: Math.abs(delta),
           quantity_before: originalStock,
@@ -480,22 +491,30 @@ function PecasTab({
         }
       }
     } else {
-      const { data: created, error } = await supabase
+      let res = await supabase
         .from('products')
-        .insert({ ...payload, active: true })
+        .insert({ ...(supportsPhotoUrl ? payloadWithPhotoUrl : payloadLegacyDesc), active: true })
         .select('id')
         .single();
 
-      if (error || !created) {
-        setFormError(`Erro ao cadastrar peça: ${error?.message || 'Erro desconhecido'}`);
+      if (res.error && supportsPhotoUrl && res.error.message.includes('photo_url')) {
+        res = await supabase
+          .from('products')
+          .insert({ ...payloadLegacyDesc, active: true })
+          .select('id')
+          .single();
+      }
+
+      if (res.error || !res.data) {
+        setFormError(`Erro ao cadastrar peça: ${res.error?.message || 'Erro desconhecido'}`);
         setSaving(false);
         return;
       }
 
       if (newStock > 0) {
         await supabase.from('stock_movements').insert({
-          product_id: created.id,
-          product_name: payload.name,
+          product_id: res.data.id,
+          product_name: basePayload.name,
           movement_type: 'entrada',
           quantity: newStock,
           quantity_before: 0,

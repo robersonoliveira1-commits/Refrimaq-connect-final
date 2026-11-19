@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Loader2, Upload, Wrench, MapPin } from 'lucide-react';
+import { Loader2, Wrench, MapPin } from 'lucide-react';
 import { AuthProvider, useAuth } from './lib/auth';
 import LoginPage from './components/LoginPage';
 import TechnicianView from './components/TechnicianView';
@@ -128,45 +128,22 @@ function AdminApp() {
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0">
         {page === 'customers' && !selectedCustomerId && (
-          <div className="flex flex-col h-full">
-            <div className="flex items-center gap-2 px-4 sm:px-6 py-4 bg-white border-b border-slate-200">
-              <button className="lg:hidden text-slate-500" onClick={() => setSidebarOpen(true)}>
-                <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
-                </svg>
-              </button>
-              <h1 className="text-xl font-bold text-slate-800 flex-1">Clientes</h1>
-              <div className="flex gap-2">
-                <button onClick={() => setShowImport(true)}
-                  className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 px-3 py-2 rounded-lg text-sm transition-colors">
-                  <Upload size={14} /><span className="hidden sm:inline">Importar</span>
-                </button>
-                <button onClick={() => { setEditingCustomer(null); setShowAddCustomer(true); }}
-                  className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors">
-                  <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                  <span className="hidden sm:inline">Novo Cliente</span>
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <CustomerList
-                onSelectCustomer={handleSelectCustomer}
-                onAddCustomer={() => { setEditingCustomer(null); setShowAddCustomer(true); }}
-                onMenuClick={() => setSidebarOpen(true)}
-                refresh={refresh}
-              />
-            </div>
-          </div>
+          <CustomerList
+            onSelectCustomer={handleSelectCustomer}
+            onAddCustomer={() => { setEditingCustomer(null); setShowAddCustomer(true); }}
+            onImportCustomers={() => setShowImport(true)}
+            onMenuClick={() => setSidebarOpen(true)}
+            refresh={refresh}
+          />
         )}
 
         {page === 'customers' && selectedCustomerId && (
           <CustomerProfile
             customerId={selectedCustomerId}
             onBack={() => setSelectedCustomerId(null)}
-            onAddContact={(id) => handleAddContact(id)}
+            onAddContact={(id, name) => handleAddContact(id, name)}
             onEditCustomer={handleEditCustomer}
+            onOpenOrder={handleOpenWorkshopOrder}
             onMenuClick={() => setSidebarOpen(true)}
             refresh={refresh}
           />

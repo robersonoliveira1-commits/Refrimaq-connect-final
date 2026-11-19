@@ -1,3 +1,11 @@
+import {
+  getCustomerContactStatus,
+  getCustomerStatusLabel,
+  formatLocalDate,
+  formatLocalDateTime,
+  formatDaysSince,
+} from './customersEngine';
+
 export type ContactStatus = 'green' | 'yellow' | 'red' | 'gray';
 
 export interface Customer {
@@ -73,49 +81,23 @@ export interface ContactSchedule {
 }
 
 export function getContactStatus(lastContactAt: string | null): ContactStatus {
-  if (!lastContactAt) return 'gray';
-  const days = Math.floor((Date.now() - new Date(lastContactAt).getTime()) / (1000 * 60 * 60 * 24));
-  if (days <= 30) return 'green';
-  if (days <= 180) return 'yellow';
-  return 'red';
+  return getCustomerContactStatus(lastContactAt);
 }
 
 export function getStatusLabel(status: ContactStatus): string {
-  const labels: Record<ContactStatus, string> = {
-    green: 'Recente',
-    yellow: 'Atenção',
-    red: 'Urgente',
-    gray: 'Novo',
-  };
-  return labels[status];
+  return getCustomerStatusLabel(status);
 }
 
 export function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleDateString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
+  return formatLocalDate(dateStr);
 }
 
 export function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleDateString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatLocalDateTime(dateStr);
 }
 
 export function daysSince(dateStr: string | null): string {
-  if (!dateStr) return 'Nunca';
-  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24));
-  if (days === 0) return 'Hoje';
-  if (days === 1) return 'Ontem';
-  return `${days} dias atrás`;
+  return formatDaysSince(dateStr);
 }
 
 export interface UsedItem {

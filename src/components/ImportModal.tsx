@@ -1,7 +1,17 @@
 import { useState, useRef } from 'react';
-import { X, Upload, AlertCircle, CheckCircle, Download } from 'lucide-react';
+import { X, Upload, AlertCircle, CheckCircle, Download, MapPin } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { geocodeAddress } from '../lib/geocode';
+import { Customer } from '../lib/types';
+import {
+  coerceCellToString,
+  parseSpreadsheetCsv,
+  isSameCustomerImportMatch,
+  mergeImportNotes,
+  hasSchemaColumn,
+  isMissingColumnSchemaError,
+  extractCustomerSegment,
+} from '../lib/customersEngine';
 import * as XLSX from 'xlsx';
 
 interface ImportModalProps {
@@ -40,7 +50,7 @@ const FIELD_LABELS: Record<keyof ColumnMap, string> = {
   address: 'Endereço (Rua)',
   number: 'Número',
   city: 'Cidade',
-  state: 'Estado',
+  state: 'Estado (UF)',
   zip_code: 'CEP',
   document: 'CPF/CNPJ',
   segment: 'Segmento',
@@ -48,44 +58,6 @@ const FIELD_LABELS: Record<keyof ColumnMap, string> = {
 };
 
 const FIELD_KEYS = Object.keys(FIELD_LABELS) as Array<keyof ColumnMap>;
-
-function parseCSV(text: string): string[][] {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length === 0) return [];
-  
-  // Detect delimiter from the first line
-  const firstLine = lines[0];
-  let delimiter = ',';
-  if (firstLine.includes('\t')) delimiter = '\t';
-  else if (firstLine.includes(';')) delimiter = ';';
-
-  return lines.map(row => {
-    const cols: string[] = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < row.length; i++) {
-      const ch = row[i];
-      if (ch === '"') {
-        if (inQuotes && row[i + 1] === '"') {
-          // escaped quote ""
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-        continue;
-      }
-      if (ch === delimiter && !inQuotes) {
-        cols.push(current.trim());
-        current = '';
-        continue;
-      }
-      current += ch;
-    }
-    cols.push(current.trim());
-    return cols;
-  }).filter(row => row.some(cell => cell !== ''));
-}
 
 async function fetchAddressByCep(cep: string): Promise<ViaCEPResult | null> {
   const cleanCep = cep.replace(/\D/g, '');
@@ -106,9 +78,7 @@ function parseAddressAndNumber(addressStr: string, numberStr: string): { street:
   let street = addressStr.trim();
   let num = numberStr.trim();
 
-  // If number is empty, try to extract it from the street address
   if (!num && street) {
-    // Match patterns like "Rua Nome da Rua, 123" or "Av. Nome da Rua 123" or "Rua Nome da Rua nº 123"
     const numberRegex = /(?:,\s*|,\s*nº\s*|\s+nº\s*|\s+)(\d+)\s*$/i;
     const match = street.match(numberRegex);
     if (match) {
@@ -117,9 +87,7 @@ function parseAddressAndNumber(addressStr: string, numberStr: string): { street:
     }
   }
 
-  // Remove any trailing commas or spaces from street
   street = street.replace(/,\s*$/, '').trim();
-
   return { street, number: num };
 }
 
@@ -131,17 +99,24 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
     name: '', phone: '', whatsapp: '', email: '',
     address: '', number: '', city: '', state: '', zip_code: '', document: '', segment: '', notes: '',
   });
+  const [enableGeocode, setEnableGeocode] = useState(true);
   const [importing, setImporting] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
-  const [importCount, setImportCount] = useState(0);
+  const [createdCount, setCreatedCount] = useState(0);
+  const [updatedCount, setUpdatedCount] = useState(0);
+  const [cancelled, setCancelled] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const [uploadError, setUploadError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(false);
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadError('');
 
-    if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
       const reader = new FileReader();
       reader.onload = (ev) => {
         try {
@@ -149,43 +124,50 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
           const workbook = XLSX.read(data, { type: 'array' });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
-          const parsed = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '' }) as string[][];
+          const rawParsed = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1, defval: '' });
+          const parsed: string[][] = rawParsed
+            .map(row => (Array.isArray(row) ? row.map(coerceCellToString) : []))
+            .filter(row => row.some(cell => cell !== ''));
           if (parsed.length < 2) {
-            alert('A planilha precisa conter ao menos uma linha de cabeçalho e uma linha de dados.');
+            setUploadError('A planilha precisa conter ao menos uma linha de cabeçalho e uma linha de dados.');
             return;
           }
           processParsedData(parsed);
-        } catch (err: any) {
-          alert('Erro ao ler planilha excel: ' + err.message);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setUploadError('Erro ao ler planilha Excel: ' + msg);
         }
       };
       reader.readAsArrayBuffer(file);
     } else {
       const reader = new FileReader();
-      reader.onload = ev => {
-        const text = ev.target?.result as string;
-        const parsed = parseCSV(text);
+      reader.onload = (ev) => {
+        const text = String(ev.target?.result ?? '');
+        const parsed = parseSpreadsheetCsv(text);
         if (parsed.length < 2) {
-          alert('O arquivo precisa conter ao menos uma linha de cabeçalho e uma linha de dados.');
+          setUploadError('O arquivo precisa conter ao menos uma linha de cabeçalho e uma linha de dados.');
           return;
         }
         processParsedData(parsed);
       };
-      reader.readAsText(file);
+      reader.readAsText(file, 'UTF-8');
     }
   }
 
   function processParsedData(parsed: string[][]) {
-    const headerRow = parsed[0].map(h => String(h || '').trim());
-    const dataRows = parsed.slice(1);
+    const headerRow = parsed[0].map(h => coerceCellToString(h));
+    const dataRows = parsed.slice(1).map(row => row.map(coerceCellToString));
 
     setHeaders(headerRow);
     setRows(dataRows);
+    setEnableGeocode(dataRows.length <= 30);
 
-    // auto-map common column names
-    const auto: ColumnMap = { name: '', phone: '', whatsapp: '', email: '', address: '', number: '', city: '', state: '', zip_code: '', document: '', segment: '', notes: '' };
+    const auto: ColumnMap = {
+      name: '', phone: '', whatsapp: '', email: '',
+      address: '', number: '', city: '', state: '', zip_code: '', document: '', segment: '', notes: '',
+    };
     const mappingRules: Record<keyof ColumnMap, RegExp> = {
-      name: /nome|name|razão|razao|empresa|cliente/i,
+      name: /nome|name|raz[aã]o|empresa|cliente/i,
       phone: /telefone|phone|tel\b|fone|celular|contato/i,
       whatsapp: /whatsapp|wapp|whats/i,
       email: /email|e-mail|correo/i,
@@ -202,7 +184,7 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
     headerRow.forEach((h, idx) => {
       for (const field of FIELD_KEYS) {
         if (!auto[field] && mappingRules[field].test(h)) {
-          auto[field] = String(idx); // store column INDEX, not header name
+          auto[field] = String(idx);
           break;
         }
       }
@@ -215,104 +197,124 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
   function getColumnValue(row: string[], colId: string): string {
     if (!colId) return '';
     const idx = parseInt(colId, 10);
-    if (isNaN(idx) || idx < 0 || idx >= row.length) return '';
-    return row[idx] ?? '';
+    if (Number.isNaN(idx) || idx < 0 || idx >= row.length) return '';
+    return coerceCellToString(row[idx]);
   }
 
-  function buildPreviewRows(): Record<string, string>[] {
-    return rows.slice(0, 5).map(row => {
-      const obj: Record<string, string> = {};
-      for (const field of FIELD_KEYS) {
-        obj[field] = getColumnValue(row, columnMap[field]);
-      }
-      return obj;
-    }).filter(r => r.name);
+  function buildAllRows(): Record<keyof ColumnMap, string>[] {
+    return rows
+      .map(row => {
+        const obj = {} as Record<keyof ColumnMap, string>;
+        for (const field of FIELD_KEYS) {
+          obj[field] = getColumnValue(row, columnMap[field]);
+        }
+        return obj;
+      })
+      .filter(r => r.name.trim().length > 0);
   }
 
-  function buildAllRows(): Record<string, string>[] {
-    return rows.map(row => {
-      const obj: Record<string, string> = {};
-      for (const field of FIELD_KEYS) {
-        obj[field] = getColumnValue(row, columnMap[field]);
+  function buildPreviewRows(): Record<keyof ColumnMap, string>[] {
+    return buildAllRows().slice(0, 5);
+  }
+
+  async function loadAllExistingCustomers(): Promise<Customer[]> {
+    const all: Customer[] = [];
+    const PAGE_SIZE = 1000;
+    let from = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .range(from, from + PAGE_SIZE - 1);
+      if (error || !data || data.length === 0) {
+        hasMore = false;
+      } else {
+        all.push(...(data as Customer[]));
+        from += PAGE_SIZE;
+        if (data.length < PAGE_SIZE) hasMore = false;
       }
-      return obj;
-    }).filter(r => r.name.trim());
+    }
+    return all;
   }
 
   async function handleImport() {
     setImporting(true);
-    setProgressMsg('Buscando clientes existentes...');
+    setCancelled(false);
+    cancelRef.current = false;
+    setProgressMsg('Carregando clientes existentes...');
     const errs: string[] = [];
-    let count = 0;
-    
-    const { data: existingCustomers } = await supabase.from('customers').select('*');
-    
+    let created = 0;
+    let updated = 0;
+
+    const knownCustomers = await loadAllExistingCustomers();
+    let hasSegmentCol = knownCustomers.length > 0 ? hasSchemaColumn(knownCustomers[0], 'segment') : false;
+
     const allRows = buildAllRows();
+    let geocodeRequests = 0;
+
     for (let i = 0; i < allRows.length; i++) {
-      const r = allRows[i];
-      setProgressMsg(`Processando cliente ${i + 1} de ${allRows.length} (${r.name})...`);
-      
-      let zip = r.zip_code?.trim() || '';
-      let addressStr = r.address?.trim() || '';
-      let numberStr = r.number?.trim() || '';
-      let cityStr = r.city?.trim() || '';
-      let stateStr = r.state?.trim() || '';
-      let emailStr = r.email?.trim() || '';
-      let phoneStr = r.phone?.trim() || '';
-      let whatsappStr = r.whatsapp?.trim() || '';
-      let documentStr = r.document?.trim() || '';
-      let segmentStr = r.segment?.trim() || '';
-      let notesStr = r.notes?.trim() || '';
-
-      const existing = existingCustomers?.find(c => 
-        (documentStr && c.document === documentStr) || 
-        (r.name && c.name.toLowerCase() === r.name.toLowerCase().trim()) ||
-        (emailStr && c.email.toLowerCase() === emailStr.toLowerCase())
-      );
-
-      // Merge values: keep existing non-empty DB values unless incoming has data and DB is empty
-      let finalName = r.name.trim();
-      let finalPhone = phoneStr || existing?.phone || '';
-      let finalWhatsapp = whatsappStr || existing?.whatsapp || '';
-      let finalEmail = emailStr || existing?.email || '';
-      let finalNotes = [existing?.notes, notesStr].filter(Boolean).join('\n') || '';
-      let finalSegment = segmentStr || '';
-      let combinedNotes = finalNotes;
-      if (finalSegment && !combinedNotes.includes(`[Segmento:`)) {
-        combinedNotes = `[Segmento: ${finalSegment}]${combinedNotes ? '\n' + combinedNotes : ''}`;
+      if (cancelRef.current) {
+        setCancelled(true);
+        break;
       }
-      let finalDoc = documentStr || existing?.document || '';
 
-      let finalZip = zip || existing?.zip_code || '';
+      const r = allRows[i];
+      const nameStr = r.name.trim();
+      setProgressMsg(`Processando ${i + 1} de ${allRows.length}: ${nameStr}`);
+
+      const zip = r.zip_code.trim();
+      const addressStr = r.address.trim();
+      const numberStr = r.number.trim();
+      const cityStr = r.city.trim();
+      const stateStr = r.state.trim().toUpperCase();
+      const emailStr = r.email.trim();
+      const phoneStr = r.phone.trim();
+      const whatsappStr = r.whatsapp.trim();
+      const documentStr = r.document.trim();
+      const segmentStr = r.segment.trim();
+      const notesStr = r.notes.trim();
+
+      const existingIdx = knownCustomers.findIndex(c =>
+        isSameCustomerImportMatch(c, { name: nameStr, document: documentStr, email: emailStr })
+      );
+      const existing = existingIdx >= 0 ? knownCustomers[existingIdx] : undefined;
+
+      const finalPhone = phoneStr || existing?.phone || '';
+      const finalWhatsapp = whatsappStr || existing?.whatsapp || '';
+      const finalEmail = emailStr || existing?.email || '';
+      const finalDoc = documentStr || existing?.document || '';
+      const finalSegment = segmentStr || extractCustomerSegment(existing);
+      const finalZip = zip || existing?.zip_code || '';
       let finalCity = cityStr || existing?.city || '';
-      let finalState = stateStr || existing?.state || '';
+      let finalState = (stateStr || existing?.state || '').toUpperCase();
 
       let baseAddress = addressStr;
       let baseNumber = numberStr;
 
-      if (existing?.address) {
+      if (existing?.address && !addressStr) {
         const dbParsed = parseAddressAndNumber(existing.address, '');
-        baseAddress = dbParsed.street || addressStr;
+        baseAddress = dbParsed.street;
         baseNumber = dbParsed.number || numberStr;
       }
 
-      // If CEP is available, query ViaCEP to complete details
       if (finalZip && (!baseAddress || !finalCity || !finalState)) {
-        setProgressMsg(`Buscando CEP ${finalZip} para ${r.name}...`);
+        setProgressMsg(`Buscando CEP ${finalZip} (${i + 1}/${allRows.length})...`);
         const cepInfo = await fetchAddressByCep(finalZip);
         if (cepInfo) {
           if (!baseAddress && cepInfo.logradouro) baseAddress = cepInfo.logradouro;
           if (!finalCity && cepInfo.localidade) finalCity = cepInfo.localidade;
-          if (!finalState && cepInfo.uf) finalState = cepInfo.uf;
+          if (!finalState && cepInfo.uf) finalState = cepInfo.uf.toUpperCase();
         }
       }
 
-      // Split street name and number correctly
       const parsedAddress = parseAddressAndNumber(baseAddress, baseNumber);
       const fullAddress = [parsedAddress.street, parsedAddress.number].filter(Boolean).join(', ');
 
-      const payload: any = {
-        name: finalName,
+      const mergedNotes = mergeImportNotes(existing?.notes, notesStr, finalSegment, hasSegmentCol);
+
+      const payload: Record<string, unknown> = {
+        name: nameStr,
         phone: finalPhone,
         whatsapp: finalWhatsapp,
         email: finalEmail,
@@ -321,55 +323,82 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
         state: finalState,
         zip_code: finalZip,
         document: finalDoc,
-        notes: combinedNotes,
+        notes: mergedNotes,
       };
-      
-      Object.keys(payload).forEach(k => {
-        if (!payload[k]) delete payload[k];
-      });
+      if (hasSegmentCol && finalSegment) {
+        payload.segment = finalSegment;
+      }
 
-      // Geo lookup if needed
-      const needsGeocoding = !existing || !existing.latitude || !existing.longitude || 
-                             (existing.address !== payload.address) || (existing.city !== payload.city);
+      const addressChanged =
+        !existing ||
+        (existing.address || '').trim() !== fullAddress ||
+        (existing.city || '').trim() !== finalCity;
+      const needsGeocoding =
+        enableGeocode &&
+        (fullAddress || finalCity) &&
+        (!existing || existing.latitude === null || existing.longitude === null || addressChanged);
 
-      if (needsGeocoding && (payload.address || payload.city)) {
-        setProgressMsg(`Buscando geolocalização para ${r.name}...`);
-        if (i > 0) await new Promise(res => setTimeout(res, 1100));
-        const coords = await geocodeAddress(payload.address || '', payload.city || '', payload.state || '');
+      if (needsGeocoding) {
+        setProgressMsg(`Buscando GPS (${i + 1}/${allRows.length}): ${nameStr}`);
+        if (geocodeRequests > 0) await new Promise(res => setTimeout(res, 1100));
+        geocodeRequests++;
+        const coords = await geocodeAddress(fullAddress, finalCity, finalState);
         if (coords) {
           payload.latitude = coords.lat;
           payload.longitude = coords.lng;
         }
       } else if (existing) {
-        if (existing.latitude) payload.latitude = existing.latitude;
-        if (existing.longitude) payload.longitude = existing.longitude;
+        if (existing.latitude !== null && existing.latitude !== undefined) payload.latitude = existing.latitude;
+        if (existing.longitude !== null && existing.longitude !== undefined) payload.longitude = existing.longitude;
       }
 
-      setProgressMsg(`Salvando ${r.name}...`);
-      if (existing) {
-        const { error } = await supabase.from('customers').update(payload).eq('id', existing.id);
-        if (error) errs.push(`Linha ${i + 1} (${r.name}): ${error.message}`);
-        else count++;
+      setProgressMsg(`Salvando (${i + 1}/${allRows.length}): ${nameStr}`);
+
+      const writeOnce = async (body: Record<string, unknown>) => {
+        if (existing) {
+          return supabase.from('customers').update(body).eq('id', existing.id).select('*').single();
+        }
+        return supabase.from('customers').insert(body).select('*').single();
+      };
+
+      let result = await writeOnce(payload);
+      if (result.error && hasSegmentCol && isMissingColumnSchemaError(result.error, 'segment')) {
+        hasSegmentCol = false;
+        delete payload.segment;
+        payload.notes = mergeImportNotes(existing?.notes, notesStr, finalSegment, false);
+        result = await writeOnce(payload);
+      }
+
+      if (result.error) {
+        errs.push(`Linha ${i + 1} (${nameStr}): ${result.error.message}`);
       } else {
-        const { error } = await supabase.from('customers').insert(payload);
-        if (error) errs.push(`Linha ${i + 1} (${r.name}): ${error.message}`);
-        else count++;
+        const savedRow = result.data as Customer | null;
+        if (existing) {
+          updated++;
+          if (savedRow) knownCustomers[existingIdx] = savedRow;
+        } else {
+          created++;
+          if (savedRow) knownCustomers.push(savedRow);
+        }
       }
     }
 
-    setImportCount(count);
+    setCreatedCount(created);
+    setUpdatedCount(updated);
     setErrors(errs);
     setImporting(false);
     setProgressMsg('');
     setStep('done');
-    if (errs.length === 0) onSuccess();
+    if (created + updated > 0) onSuccess();
   }
 
-  const maxCols = Math.max(headers.length, ...rows.map(r => r.length));
+  const maxCols = Math.max(headers.length, ...rows.map(r => r.length), 0);
   const columnOptions = Array.from({ length: maxCols }).map((_, i) => ({
-    label: i < headers.length ? headers[i] : `Coluna extra ${i + 1}`,
-    value: String(i)
+    label: i < headers.length && headers[i] ? headers[i] : `Coluna extra ${i + 1}`,
+    value: String(i),
   }));
+
+  const validTotal = buildAllRows().length;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
@@ -379,7 +408,11 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
             <h2 className="font-bold text-slate-800">Importar Clientes</h2>
             <p className="text-sm text-slate-500">Importar via arquivo CSV, planilha Excel (.xls, .xlsx) ou TXT</p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+          <button
+            onClick={onClose}
+            disabled={importing}
+            className="text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40"
+          >
             <X size={20} />
           </button>
         </div>
@@ -394,17 +427,25 @@ export default function ImportModal({ onClose, onSuccess }: ImportModalProps) {
               >
                 <Upload size={32} className="text-slate-300 mx-auto mb-3" />
                 <p className="font-medium text-slate-600">Clique para selecionar o arquivo</p>
-                <p className="text-sm text-slate-400 mt-1">Planilhas Excel (.xlsx, .xls), CSV ou TXT com separador vírgula, ponto-e-vírgula ou tabulação</p>
+                <p className="text-sm text-slate-400 mt-1">
+                  Planilhas Excel (.xlsx, .xls), CSV (ponto-e-vírgula ou vírgula) ou TXT
+                </p>
                 <input ref={fileRef} type="file" accept=".csv,.txt,.tsv,.xls,.xlsx" onChange={handleFile} className="hidden" />
               </div>
+              {uploadError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700 flex items-center gap-2">
+                  <AlertCircle size={16} className="shrink-0" />
+                  {uploadError}
+                </div>
+              )}
               <div className="bg-slate-50 rounded-xl p-4">
                 <p className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-1.5">
-                  <Download size={12} /> Formato esperado
+                  <Download size={12} /> Formato esperado (compatível com Excel PT-BR)
                 </p>
-                <code className="text-xs text-slate-500 font-mono whitespace-pre">
-{`nome,telefone,email,cidade
-João Silva,(11) 99999-0001,joao@email.com,São Paulo
-Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
+                <code className="text-xs text-slate-500 font-mono whitespace-pre block overflow-x-auto">
+{`Nome;Telefone;E-mail;Segmento;Cidade;UF;CPF/CNPJ
+João Silva;(41) 99999-0001;joao@email.com;Bar;Curitiba;PR;123.456.789-00
+Maria Santos;(41) 99999-0002;maria@email.com;Restaurante;Pinhais;PR;12.345.678/0001-90`}
                 </code>
               </div>
             </div>
@@ -420,7 +461,6 @@ Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
                 </p>
               </div>
 
-              {/* show first few rows for reference */}
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50">
@@ -477,13 +517,13 @@ Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
           {step === 'preview' && (
             <div className="space-y-4">
               <p className="text-sm text-slate-600">
-                Prévia dos primeiros registros. Total a importar: <strong>{buildAllRows().length}</strong>
+                Prévia dos primeiros registros. Total válido para importar/atualizar: <strong>{validTotal}</strong>
               </p>
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50">
                     <tr>
-                      {['Nome', 'Telefone', 'E-mail', 'Endereço', 'Cidade'].map(h => (
+                      {['Nome', 'Telefone', 'Segmento', 'Endereço', 'Cidade'].map(h => (
                         <th key={h} className="px-3 py-2 text-left font-semibold text-slate-600">{h}</th>
                       ))}
                     </tr>
@@ -493,7 +533,7 @@ Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
                       <tr key={i} className="hover:bg-slate-50">
                         <td className="px-3 py-2 text-slate-700 font-medium">{row.name || '—'}</td>
                         <td className="px-3 py-2 text-slate-500">{row.phone || '—'}</td>
-                        <td className="px-3 py-2 text-slate-500">{row.email || '—'}</td>
+                        <td className="px-3 py-2 text-slate-500">{row.segment || '—'}</td>
                         <td className="px-3 py-2 text-slate-500" title="Como o endereço será salvo">
                           {[row.address, row.number].filter(Boolean).join(', ') || '—'}
                         </td>
@@ -503,21 +543,61 @@ Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
                   </tbody>
                 </table>
               </div>
-              {buildAllRows().length === 0 && (
+
+              <label className="flex items-start gap-2.5 bg-slate-50 border border-slate-200 rounded-xl p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableGeocode}
+                  disabled={importing}
+                  onChange={e => setEnableGeocode(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-400"
+                />
+                <div className="text-xs text-slate-600">
+                  <span className="font-semibold text-slate-700 flex items-center gap-1">
+                    <MapPin size={12} className="text-amber-500" />
+                    Buscar geolocalização (GPS) automaticamente durante a importação
+                  </span>
+                  <p className="text-slate-500 mt-0.5">
+                    Usa OpenStreetMap (~1,1s por cliente novo). Para planilhas grandes, desmarque para importar em segundos e sincronize GPS depois.
+                  </p>
+                </div>
+              </label>
+
+              {validTotal === 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
                   <p className="text-sm text-amber-700">
                     Nenhuma linha válida encontrada. Verifique se a coluna "Nome" está mapeada corretamente.
                   </p>
                 </div>
               )}
+
+              {importing && progressMsg && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 font-medium flex items-center justify-between gap-3">
+                  <span className="truncate">{progressMsg}</span>
+                  <button
+                    type="button"
+                    onClick={() => { cancelRef.current = true; }}
+                    className="px-2.5 py-1 bg-white border border-amber-300 hover:bg-amber-100 text-amber-800 rounded-lg font-semibold shrink-0"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
+
               <div className="flex gap-3">
-                <button onClick={() => setStep('map')}
-                  className="flex-1 py-2.5 border border-slate-200 text-slate-600 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors">
+                <button
+                  onClick={() => setStep('map')}
+                  disabled={importing}
+                  className="flex-1 py-2.5 border border-slate-200 text-slate-600 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-40"
+                >
                   Voltar
                 </button>
-                <button onClick={handleImport} disabled={importing || buildAllRows().length === 0}
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">
-                  {importing ? (progressMsg || 'Importando...') : `Importar ${buildAllRows().length} clientes`}
+                <button
+                  onClick={handleImport}
+                  disabled={importing || validTotal === 0}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {importing ? 'Importando...' : `Importar ${validTotal} clientes`}
                 </button>
               </div>
             </div>
@@ -527,27 +607,34 @@ Maria Santos,(11) 99999-0002,maria@email.com,Campinas`}
           {step === 'done' && (
             <div className="text-center py-6">
               <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${
-                errors.length > 0 ? 'bg-amber-100' : 'bg-emerald-100'
+                errors.length > 0 || cancelled ? 'bg-amber-100' : 'bg-emerald-100'
               }`}>
-                {errors.length > 0
+                {errors.length > 0 || cancelled
                   ? <AlertCircle size={32} className="text-amber-500" />
                   : <CheckCircle size={32} className="text-emerald-500" />
                 }
               </div>
-              <h3 className="text-lg font-bold text-slate-800 mb-1">Importação Concluída</h3>
-              <p className="text-slate-500 text-sm">{importCount} clientes importados com sucesso.</p>
+              <h3 className="text-lg font-bold text-slate-800 mb-1">
+                {cancelled ? 'Importação Interrompida' : 'Importação Concluída'}
+              </h3>
+              <p className="text-slate-600 text-sm">
+                <strong>{createdCount}</strong> novo(s) criado(s) · <strong>{updatedCount}</strong> atualizado(s)
+                {errors.length > 0 ? ` · ${errors.length} erro(s)` : ''}
+              </p>
               {errors.length > 0 && (
                 <div className="mt-4 bg-red-50 border border-red-100 rounded-xl p-4 text-left">
                   <p className="text-sm font-semibold text-red-700 mb-2 flex items-center gap-1.5">
-                    <AlertCircle size={14} /> {errors.length} lote(s) com erro
+                    <AlertCircle size={14} /> {errors.length} linha(s) com erro
                   </p>
-                  <div className="space-y-1 max-h-32 overflow-auto">
+                  <div className="space-y-1 max-h-36 overflow-auto">
                     {errors.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
                   </div>
                 </div>
               )}
-              <button onClick={onClose}
-                className="mt-6 px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors">
+              <button
+                onClick={onClose}
+                className="mt-6 px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
                 Fechar
               </button>
             </div>

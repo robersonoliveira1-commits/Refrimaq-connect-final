@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import {
   Users, AlertCircle, Clock, UserPlus, Map, Calendar,
   UsersRound, ChevronRight, CheckCircle, TrendingUp,
-  Phone, MapPin, ArrowRight,
+  Phone, ArrowRight,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { Customer, ContactStatus, getContactStatus, daysSince } from '../lib/types';
+import { Customer, getContactStatus, daysSince } from '../lib/types';
+import { getCustomerStatusRangeLabel } from '../lib/customersEngine';
 
 interface OverviewProps {
   onNavigate: (page: string) => void;
@@ -48,13 +49,6 @@ interface UpcomingSchedule {
 }
 
 const DAY_LABELS = ['', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex'];
-
-const STATUS_DOT: Record<ContactStatus, string> = {
-  green: 'bg-emerald-500',
-  yellow: 'bg-amber-500',
-  red: 'bg-red-500',
-  gray: 'bg-slate-400',
-};
 
 export default function Dashboard({ onNavigate, onSelectCustomer, onMenuClick, refresh }: OverviewProps) {
   const [metrics, setMetrics] = useState<Metrics>({ total: 0, green: 0, yellow: 0, red: 0, gray: 0 });
@@ -232,7 +226,7 @@ export default function Dashboard({ onNavigate, onSelectCustomer, onMenuClick, r
               <span className="w-3 h-3 rounded-full bg-emerald-500" />
             </div>
             <p className="text-2xl font-bold text-slate-800">{metrics.green}</p>
-            <p className="text-xs text-slate-500 mt-0.5">Em dia (30d)</p>
+            <p className="text-xs text-slate-500 mt-0.5">{getCustomerStatusRangeLabel('green', true)}</p>
           </button>
 
           <button onClick={() => onNavigate('customers')}
@@ -241,7 +235,7 @@ export default function Dashboard({ onNavigate, onSelectCustomer, onMenuClick, r
               <Clock size={18} className="text-amber-600" />
             </div>
             <p className="text-2xl font-bold text-slate-800">{metrics.yellow}</p>
-            <p className="text-xs text-slate-500 mt-0.5">Atencao (90-180d)</p>
+            <p className="text-xs text-slate-500 mt-0.5">{getCustomerStatusRangeLabel('yellow', true)}</p>
           </button>
 
           <button onClick={() => onNavigate('customers')}
@@ -250,7 +244,7 @@ export default function Dashboard({ onNavigate, onSelectCustomer, onMenuClick, r
               <AlertCircle size={18} className="text-red-600" />
             </div>
             <p className="text-2xl font-bold text-slate-800">{metrics.red}</p>
-            <p className="text-xs text-slate-500 mt-0.5">Urgente (+180d)</p>
+            <p className="text-xs text-slate-500 mt-0.5">{getCustomerStatusRangeLabel('red', true)}</p>
           </button>
 
           <button onClick={() => onNavigate('customers')}

@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth';
+import { toLocalDateTimeInput, localDateTimeInputToIso } from '../lib/customersEngine';
 
 interface AddContactModalProps {
   customerId: string;
@@ -18,17 +20,24 @@ const CONTACT_TYPES = [
 ];
 
 export default function AddContactModal({ customerId, customerName, onClose, onSuccess }: AddContactModalProps) {
+  const { profile } = useAuth();
   const [form, setForm] = useState({
     contact_type: 'phone',
-    contacted_by: '',
+    contacted_by: profile?.full_name ?? '',
     subject: '',
     details: '',
-    contacted_at: new Date().toISOString().slice(0, 16),
+    contacted_at: toLocalDateTimeInput(),
     next_contact_at: '',
     next_contact_notes: '',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (profile?.full_name) {
+      setForm(prev => (prev.contacted_by ? prev : { ...prev, contacted_by: profile.full_name }));
+    }
+  }, [profile?.full_name]);
 
   function set(field: string, value: string) {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -36,34 +45,69 @@ export default function AddContactModal({ customerId, customerName, onClose, onS
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.subject.trim()) { setError('O assunto é obrigatório.'); return; }
+    if (!form.subject.trim()) {
+      setError('O assunto é obrigatório.');
+      return;
+    }
+
+    const contactedAtIso = localDateTimeInputToIso(form.contacted_at);
+    if (!contactedAtIso) {
+      setError('Informe uma data e hora válidas para o contato.');
+      return;
+    }
+
+    const nextContactIso = form.next_contact_at
+      ? localDateTimeInputToIso(form.next_contact_at)
+      : null;
+
+    if (form.next_contact_at && !nextContactIso) {
+      setError('Data/hora do próximo contato inválida.');
+      return;
+    }
+
     setSaving(true);
     setError('');
 
     const payload: Record<string, unknown> = {
       customer_id: customerId,
       contact_type: form.contact_type,
-      contacted_by: form.contacted_by,
+      contacted_by: form.contacted_by.trim(),
       subject: form.subject.trim(),
       details: form.details.trim(),
-      contacted_at: form.contacted_at,
+      contacted_at: contactedAtIso,
     };
-    if (form.next_contact_at) {
-      payload.next_contact_at = form.next_contact_at;
-      payload.next_contact_notes = form.next_contact_notes;
+    if (nextContactIso) {
+      payload.next_contact_at = nextContactIso;
+      payload.next_contact_notes = form.next_contact_notes.trim();
     }
 
-    const { error: err } = await supabase.from('contacts').insert(payload);
-    if (err) { setError(err.message); setSaving(false); return; }
+    const { data: createdContact, error: err } = await supabase
+      .from('contacts')
+      .insert(payload)
+      .select('id')
+      .single();
 
-    // if next contact set, also create a schedule
-    if (form.next_contact_at) {
-      await supabase.from('contact_schedules').insert({
+    if (err) {
+      setError(err.message);
+      setSaving(false);
+      return;
+    }
+
+    // If next contact set, create linked schedule with contact_id
+    if (nextContactIso) {
+      const { error: schedErr } = await supabase.from('contact_schedules').insert({
         customer_id: customerId,
-        scheduled_at: form.next_contact_at,
-        assigned_to: form.contacted_by,
-        notes: form.next_contact_notes,
+        contact_id: createdContact?.id ?? null,
+        scheduled_at: nextContactIso,
+        assigned_to: form.contacted_by.trim(),
+        notes: form.next_contact_notes.trim(),
       });
+      if (schedErr) {
+        setError(`Contato salvo, mas falha ao criar agendamento: ${schedErr.message}`);
+        setSaving(false);
+        onSuccess();
+        return;
+      }
     }
 
     onSuccess();
@@ -76,14 +120,14 @@ export default function AddContactModal({ customerId, customerName, onClose, onS
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <div>
             <h2 className="font-bold text-slate-800">Registrar Contato</h2>
-            <p className="text-sm text-slate-500">{customerName}</p>
+            {customerName && <p className="text-sm text-slate-500">{customerName}</p>}
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
             <X size={20} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-auto px-6 py-5 space-y-4">
+        <form id="add-contact-form" onSubmit={handleSubmit} className="flex-1 overflow-auto px-6 py-5 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1.5">Tipo de Contato</label>
@@ -98,7 +142,7 @@ export default function AddContactModal({ customerId, customerName, onClose, onS
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5">Data e Hora</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5">Data e Hora (Horário Local)</label>
               <input
                 type="datetime-local"
                 value={form.contacted_at}
@@ -176,7 +220,8 @@ export default function AddContactModal({ customerId, customerName, onClose, onS
             Cancelar
           </button>
           <button
-            onClick={handleSubmit}
+            type="submit"
+            form="add-contact-form"
             disabled={saving}
             className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
           >

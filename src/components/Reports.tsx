@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { BarChart3, Users, TrendingUp, Phone, MessageCircle, Mail, Navigation, MoreHorizontal } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getContactStatus } from '../lib/types';
+import { getCustomerStatusRangeLabel } from '../lib/customersEngine';
 import Header from './Header';
 
 interface ReportsProps {
@@ -139,10 +140,10 @@ export default function Reports({ onMenuClick, refresh }: ReportsProps) {
   const totalContacts = typeStats.reduce((s, t) => s + t.count, 0);
 
   const statusItems = [
-    { label: 'Recente (até 30 dias)', value: customerStats.green, color: 'bg-emerald-500', text: 'text-emerald-700' },
-    { label: 'Atenção (90–180 dias)', value: customerStats.yellow, color: 'bg-amber-500', text: 'text-amber-700' },
-    { label: 'Urgente (+180 dias)', value: customerStats.red, color: 'bg-red-500', text: 'text-red-700' },
-    { label: 'Novos (sem contato)', value: customerStats.gray, color: 'bg-slate-400', text: 'text-slate-600' },
+    { label: getCustomerStatusRangeLabel('green'), value: customerStats.green, color: 'bg-emerald-500', text: 'text-emerald-700' },
+    { label: getCustomerStatusRangeLabel('yellow'), value: customerStats.yellow, color: 'bg-amber-500', text: 'text-amber-700' },
+    { label: getCustomerStatusRangeLabel('red'), value: customerStats.red, color: 'bg-red-500', text: 'text-red-700' },
+    { label: getCustomerStatusRangeLabel('gray'), value: customerStats.gray, color: 'bg-slate-400', text: 'text-slate-600' },
   ];
 
   return (

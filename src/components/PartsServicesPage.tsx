@@ -2537,18 +2537,14 @@ function RelatoriosTab({ refresh }: { refresh: number }) {
 
   const barMax = (vals: number[]) => Math.max(...vals, 1);
 
-  function Bar({ value, max, color = 'bg-amber-400', label }: { value: number; max: number; color?: string; label?: string }) {
+  function Bar({ value, max, color = 'bg-amber-500' }: { value: number; max: number; color?: string; label?: string }) {
     const pct = Math.min(100, Math.max(0, (Math.max(0, value) / max) * 100));
     return (
-      <div className="flex-1 h-4 bg-slate-100 rounded overflow-hidden">
+      <div className="flex-1 h-3.5 bg-slate-100 rounded-full overflow-hidden">
         <div
-          className={`h-full ${color} rounded transition-all duration-500 flex items-center justify-end pr-1.5`}
-          style={{ width: `${Math.max(pct, value > 0 ? 4 : 0)}%` }}
-        >
-          <span className="text-white text-[9px] font-bold leading-none whitespace-nowrap">
-            {label ?? (value > 0 ? value : '')}
-          </span>
-        </div>
+          className={`h-full ${color} rounded-full transition-all duration-500`}
+          style={{ width: `${pct}%`, minWidth: value > 0 ? '6px' : 0 }}
+        />
       </div>
     );
   }
@@ -2613,8 +2609,9 @@ function RelatoriosTab({ refresh }: { refresh: number }) {
               {report.topUsedParts.map((p, i) => (
                 <div key={p.productId} className="flex items-center gap-2">
                   <span className="text-xs text-slate-400 w-4 text-right flex-shrink-0">{i + 1}</span>
-                  <span className="text-xs text-slate-600 w-36 truncate flex-shrink-0" title={p.name}>{p.name}</span>
+                  <span className="text-xs font-medium text-slate-700 w-36 truncate flex-shrink-0" title={p.name}>{p.name}</span>
                   <Bar value={p.qty} max={barMax(report.topUsedParts.map(x => x.qty))} />
+                  <span className="text-xs font-bold text-slate-800 tabular-nums w-12 text-right flex-shrink-0">{p.qty} un</span>
                 </div>
               ))}
             </div>

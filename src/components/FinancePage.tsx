@@ -113,22 +113,26 @@ function BarList({ data, valueFormatter = String }: {
 }) {
   const max = Math.max(...data.map(d => d.value), 1);
   return (
-    <div className="space-y-2">
-      {data.map((d, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <span className="text-xs text-slate-500 w-32 truncate flex-shrink-0" title={d.label}>{d.label}</span>
-          <div className="flex-1 h-5 bg-slate-100 rounded-md overflow-hidden">
-            <div
-              className="h-full bg-amber-400 rounded-md transition-all duration-500 flex items-center justify-end pr-1.5"
-              style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value > 0 ? '2rem' : 0 }}
-            >
-              <span className="text-white text-[10px] font-bold leading-none whitespace-nowrap">
-                {valueFormatter(d.value)}
-              </span>
+    <div className="space-y-2.5">
+      {data.map((d, i) => {
+        const pct = Math.max(0, Math.min(100, (d.value / max) * 100));
+        return (
+          <div key={i} className="flex items-center gap-3">
+            <span className="text-xs font-medium text-slate-700 w-36 sm:w-40 truncate flex-shrink-0" title={d.label}>
+              {d.label}
+            </span>
+            <div className="flex-1 h-3.5 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-amber-500 rounded-full transition-all duration-500"
+                style={{ width: `${pct}%`, minWidth: d.value > 0 ? '6px' : 0 }}
+              />
             </div>
+            <span className="text-xs font-bold text-slate-800 tabular-nums whitespace-nowrap text-right w-24 flex-shrink-0">
+              {valueFormatter(d.value)}
+            </span>
           </div>
-        </div>
-      ))}
+        );
+      })}
       {data.length === 0 && <p className="text-xs text-slate-400 text-center py-3">Sem dados no período</p>}
     </div>
   );
@@ -139,17 +143,17 @@ function BarList({ data, valueFormatter = String }: {
 function MonthBars({ data }: { data: { month: string; value: number }[] }) {
   const max = Math.max(...data.map(d => d.value), 1);
   return (
-    <div className="flex items-end gap-2 h-32">
+    <div className="flex items-end gap-2 h-36">
       {data.map(m => (
-        <div key={m.month} className="flex-1 flex flex-col items-center gap-1">
-          <span className="text-[10px] font-medium text-slate-500">
+        <div key={m.month} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+          <span className="text-[10px] font-semibold text-slate-700 tabular-nums truncate max-w-full" title={fmtCurrency(m.value)}>
             {m.value > 0 ? fmtCurrency(m.value).replace('R$\u00a0', '') : ''}
           </span>
           <div
-            className="w-full bg-amber-400 rounded-t transition-all duration-500 min-h-[4px]"
+            className="w-full bg-amber-500 rounded-t transition-all duration-500 min-h-[4px]"
             style={{ height: `${(m.value / max) * 96}px` }}
           />
-          <span className="text-[10px] text-slate-400 text-center leading-tight">{m.month}</span>
+          <span className="text-[10px] font-medium text-slate-500 text-center leading-tight">{m.month}</span>
         </div>
       ))}
     </div>
@@ -162,16 +166,17 @@ function DonutChart({ data }: { data: { label: string; value: number; color: str
   const total = data.reduce((s, d) => s + d.value, 0);
   if (total === 0) return <p className="text-xs text-slate-400 text-center py-4">Sem dados no período</p>;
   let offset = 0;
-  const r = 38, cx = 50, cy = 50, circ = 2 * Math.PI * r;
+  const r = 42, cx = 56, cy = 56, circ = 2 * Math.PI * r;
+  const totalLabel = fmtCurrency(total).replace('R$\u00a0', '');
   return (
     <div className="flex items-center gap-4">
-      <svg width="100" height="100" viewBox="0 0 100 100" className="flex-shrink-0">
+      <svg width="112" height="112" viewBox="0 0 112 112" className="flex-shrink-0">
         {data.map((d, i) => {
           const pct = d.value / total;
           const dash = pct * circ;
           const seg = (
             <circle key={i} cx={cx} cy={cy} r={r} fill="none"
-              stroke={d.color} strokeWidth="20"
+              stroke={d.color} strokeWidth="16"
               strokeDasharray={`${dash} ${circ - dash}`}
               strokeDashoffset={-offset * circ}
               style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }}
@@ -180,18 +185,21 @@ function DonutChart({ data }: { data: { label: string; value: number; color: str
           offset += pct;
           return seg;
         })}
-        <text x="50" y="54" textAnchor="middle" fontSize="11" fontWeight="700" fill="#1e293b">
-          {fmtCurrency(total).replace('R$\u00a0', '')}
+        <text x="56" y="53" textAnchor="middle" fontSize="9" fontWeight="600" fill="#64748b">
+          Total
+        </text>
+        <text x="56" y="65" textAnchor="middle" fontSize={totalLabel.length > 9 ? '9' : '10.5'} fontWeight="800" fill="#1e293b">
+          {totalLabel}
         </text>
       </svg>
       <div className="flex-1 space-y-1.5 min-w-0">
         {data.map((d, i) => (
-          <div key={i} className="flex items-center justify-between gap-1">
+          <div key={i} className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: d.color }} />
-              <span className="text-xs text-slate-600 truncate">{d.label}</span>
+              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: d.color }} />
+              <span className="text-xs font-medium text-slate-700 truncate">{d.label}</span>
             </div>
-            <span className="text-xs font-semibold text-slate-700 flex-shrink-0">{fmtCurrency(d.value)}</span>
+            <span className="text-xs font-bold text-slate-800 tabular-nums flex-shrink-0">{fmtCurrency(d.value)}</span>
           </div>
         ))}
       </div>

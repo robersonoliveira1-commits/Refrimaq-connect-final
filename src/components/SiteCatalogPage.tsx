@@ -26,6 +26,8 @@ import {
 import { supabase } from '../lib/supabase';
 import Header from './Header';
 import SiteVisitsTab from './SiteVisitsTab';
+import SiteBannersTab from './SiteBannersTab';
+import { getBannerScheduleStatus, getLocalTodayIso } from '../lib/siteBannersEngine';
 import {
   SITE_CATEGORIES,
   SITE_PRODUCTS_SETUP_SQL,
@@ -88,8 +90,9 @@ export default function SiteCatalogPage({
   onOpenWorkshopOrder,
   onSelectCustomer,
 }: SiteCatalogPageProps) {
-  const [activeTab, setActiveTab] = useState<'catalog' | 'visits'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'visits' | 'banners'>('catalog');
   const [newVisitsCount, setNewVisitsCount] = useState(0);
+  const [liveBannersCount, setLiveBannersCount] = useState(0);
   const [items, setItems] = useState<SiteProductRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [missingTable, setMissingTable] = useState(false);
@@ -128,6 +131,19 @@ export default function SiteCatalogPage({
       .then(({ count, error }) => {
         if (!error && typeof count === 'number') {
           setNewVisitsCount(count);
+        }
+      });
+    supabase
+      .from('site_banners')
+      .select('active, starts_on, ends_on')
+      .eq('active', true)
+      .then(({ data, error }) => {
+        if (!error && data) {
+          const today = getLocalTodayIso();
+          const live = data.filter(
+            b => getBannerScheduleStatus(b as { active: boolean; starts_on: string | null; ends_on: string | null }, today) === 'live'
+          ).length;
+          setLiveBannersCount(live);
         }
       });
   }, []);
@@ -440,7 +456,9 @@ export default function SiteCatalogPage({
         subtitle={
           activeTab === 'catalog'
             ? 'Gerencie os produtos exibidos no site público refrimaqrs.com.br em tempo real'
-            : 'Agendamentos de visita técnica recebidos pelo site (Corretivo, Sanitização e Projetos)'
+            : activeTab === 'visits'
+            ? 'Agendamentos de visita técnica recebidos pelo site (Corretivo, Sanitização e Projetos)'
+            : 'Personalize o Hero do site para Black Friday, Natal, promoções e campanhas sazonais'
         }
         onMenuClick={onMenuClick}
         actions={
@@ -468,7 +486,7 @@ export default function SiteCatalogPage({
       />
 
       <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
-        {/* Sub-tab Switcher: Catálogo vs Visitas Técnicas */}
+        {/* Sub-tab Switcher: Catálogo | Visitas Técnicas | Banners / Hero */}
         <div className="flex flex-wrap items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
           <button
             type="button"
@@ -504,6 +522,23 @@ export default function SiteCatalogPage({
               </span>
             )}
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('banners')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'banners'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Sparkles size={16} />
+            Banners / Hero
+            {liveBannersCount > 0 && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-600 text-white font-semibold tabular-nums">
+                {liveBannersCount}
+              </span>
+            )}
+          </button>
         </div>
 
         {activeTab === 'visits' ? (
@@ -512,6 +547,8 @@ export default function SiteCatalogPage({
             onSelectCustomer={onSelectCustomer}
             onNewCountChange={setNewVisitsCount}
           />
+        ) : activeTab === 'banners' ? (
+          <SiteBannersTab onLiveCountChange={setLiveBannersCount} />
         ) : (
           <>
         {errorMsg && (

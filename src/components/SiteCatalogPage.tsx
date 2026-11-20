@@ -51,6 +51,7 @@ import {
 } from '../lib/siteCatalogEngine';
 import { SITE_CATALOG_SEED } from '../data/siteCatalogSeed';
 import { getLocalTodayFileStamp } from '../lib/customersEngine';
+import { processImageForSlot } from '../lib/imageAutoFit';
 
 interface SiteCatalogPageProps {
   onMenuClick: () => void;
@@ -322,21 +323,25 @@ export default function SiteCatalogPage({
     setModalError('');
 
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const safeSlug = slugifySiteProduct(form.title || 'produto');
-      const path = `site-catalog/${safeSlug}-${Date.now()}.${ext}`;
+      const processed = await processImageForSlot(file, {
+        preset: 'product',
+        mode: 'auto',
+        baseFileName: safeSlug,
+      });
+      const path = `site-catalog/${safeSlug}-${Date.now()}.${processed.ext}`;
 
       let publicUrl = '';
       const primary = await supabase.storage
         .from('used-items-photos')
-        .upload(path, file, { upsert: true });
+        .upload(path, processed.file, { upsert: true, contentType: processed.file.type });
 
       if (!primary.error && primary.data) {
         publicUrl = supabase.storage.from('used-items-photos').getPublicUrl(primary.data.path).data.publicUrl;
       } else {
         const fallback = await supabase.storage
           .from('product-photos')
-          .upload(path, file, { upsert: true });
+          .upload(path, processed.file, { upsert: true, contentType: processed.file.type });
         if (fallback.error || !fallback.data) {
           throw new Error(fallback.error?.message || primary.error?.message || 'Erro no upload da foto.');
         }

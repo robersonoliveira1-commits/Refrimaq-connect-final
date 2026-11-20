@@ -21,9 +21,17 @@ import {
   ArrowRight,
   Layers,
   Files,
+  Wand2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { SITE_CATEGORIES, resolveSiteMediaUrl, slugifySiteProduct } from '../lib/siteCatalogEngine';
+import {
+  AUTO_COVER_MAX_RATIO_DIFF,
+  ImageFitMode,
+  ImageFocalY,
+  fetchImageUrlAsBlob,
+  processImageForSlot,
+} from '../lib/imageAutoFit';
 import {
   BANNER_ACTION_LABELS,
   BANNER_QUICK_TEMPLATES,
@@ -69,6 +77,11 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
   const [saving, setSaving] = useState(false);
   const [uploadingTarget, setUploadingTarget] = useState<'desktop' | 'mobile' | null>(null);
   const [modalError, setModalError] = useState('');
+  const [fitMode, setFitMode] = useState<ImageFitMode>('auto');
+  const [focalY, setFocalY] = useState<ImageFocalY>('center');
+  const [autoGenerateMobile, setAutoGenerateMobile] = useState(true);
+  const [autoFitNotice, setAutoFitNotice] = useState('');
+  const [previewNeedsAmbient, setPreviewNeedsAmbient] = useState(false);
 
   const desktopFileRef = useRef<HTMLInputElement>(null);
   const mobileFileRef = useRef<HTMLInputElement>(null);
@@ -121,6 +134,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
     });
     setPreviewMode('desktop');
     setModalError('');
+    setAutoFitNotice('');
     setModalOpen(true);
   }
 
@@ -149,6 +163,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
     });
     setPreviewMode('desktop');
     setModalError('');
+    setAutoFitNotice('');
     setModalOpen(true);
   }
 
@@ -172,54 +187,120 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
     }
   }
 
+  useEffect(() => {
+    setPreviewNeedsAmbient(false);
+  }, [form.desktop_image_url, form.mobile_image_url, previewMode, modalOpen]);
+
+  async function uploadProcessedFile(path: string, file: File): Promise<string> {
+    const primary = await supabase.storage
+      .from('used-items-photos')
+      .upload(path, file, { upsert: true, contentType: file.type });
+
+    if (!primary.error && primary.data) {
+      return supabase.storage
+        .from('used-items-photos')
+        .getPublicUrl(primary.data.path).data.publicUrl;
+    }
+
+    const fallback = await supabase.storage
+      .from('product-photos')
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (fallback.error || !fallback.data) {
+      throw new Error(fallback.error?.message || primary.error?.message || 'Falha no upload');
+    }
+    return supabase.storage
+      .from('product-photos')
+      .getPublicUrl(fallback.data.path).data.publicUrl;
+  }
+
+  async function processAndUploadBannerBlob(target: 'desktop' | 'mobile', sourceBlob: Blob) {
+    setUploadingTarget(target);
+    setModalError('');
+    setAutoFitNotice('');
+
+    try {
+      const safeName = slugifySiteProduct(form.name || 'campanha');
+      const ts = Date.now();
+      const targetPreset =
+        target === 'mobile'
+          ? 'banner_mobile'
+          : form.mode === 'artwork'
+          ? 'banner_desktop'
+          : 'banner_editorial';
+
+      const mainProcessed = await processImageForSlot(sourceBlob, {
+        preset: targetPreset,
+        mode: fitMode,
+        focalY,
+        baseFileName: `${safeName}-${target}`,
+      });
+
+      const mainPath = `site-banners/${safeName}-${target}-${ts}.${mainProcessed.ext}`;
+      const mainUrl = await uploadProcessedFile(mainPath, mainProcessed.file);
+
+      let autoMobileUrl: string | null = null;
+      let mobileSummary = '';
+
+      if (target === 'desktop' && form.mode === 'artwork' && autoGenerateMobile) {
+        const mobProcessed = await processImageForSlot(sourceBlob, {
+          preset: 'banner_mobile',
+          mode: fitMode,
+          focalY,
+          baseFileName: `${safeName}-mobile`,
+        });
+        const mobPath = `site-banners/${safeName}-mobile-${ts}.${mobProcessed.ext}`;
+        autoMobileUrl = await uploadProcessedFile(mobPath, mobProcessed.file);
+        mobileSummary = ` + Mobile ${mobProcessed.plan.summaryLabel}`;
+      }
+
+      setForm(prev => {
+        if (target === 'desktop') {
+          return {
+            ...prev,
+            desktop_image_url: mainUrl,
+            mobile_image_url: autoMobileUrl ?? prev.mobile_image_url,
+          };
+        }
+        return { ...prev, mobile_image_url: mainUrl };
+      });
+
+      setAutoFitNotice(
+        `Ajuste automático aplicado (${mainProcessed.sizeKb} KB): ${mainProcessed.plan.summaryLabel}${mobileSummary}`
+      );
+    } catch (err) {
+      setModalError(
+        `Erro ao ajustar/enviar imagem: ${err instanceof Error ? err.message : 'erro inesperado'}`
+      );
+    } finally {
+      setUploadingTarget(null);
+      if (target === 'desktop' && desktopFileRef.current) desktopFileRef.current.value = '';
+      if (target === 'mobile' && mobileFileRef.current) mobileFileRef.current.value = '';
+    }
+  }
+
   async function handleImageUpload(
     target: 'desktop' | 'mobile',
     e: React.ChangeEvent<HTMLInputElement>
   ) {
     const file = e.target.files?.[0];
     if (!file) return;
+    await processAndUploadBannerBlob(target, file);
+  }
+
+  async function handleRefitExistingImage(target: 'desktop' | 'mobile') {
+    const rawUrl = target === 'desktop' ? form.desktop_image_url : form.mobile_image_url;
+    if (!rawUrl.trim()) return;
     setUploadingTarget(target);
     setModalError('');
-
+    setAutoFitNotice('');
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const safeName = slugifySiteProduct(form.name || 'campanha');
-      const path = `site-banners/${safeName}-${target}-${Date.now()}.${ext}`;
-
-      let publicUrl = '';
-      const primary = await supabase.storage
-        .from('used-items-photos')
-        .upload(path, file, { upsert: true });
-
-      if (!primary.error && primary.data) {
-        publicUrl = supabase.storage
-          .from('used-items-photos')
-          .getPublicUrl(primary.data.path).data.publicUrl;
-      } else {
-        const fallback = await supabase.storage
-          .from('product-photos')
-          .upload(path, file, { upsert: true });
-        if (fallback.error || !fallback.data) {
-          throw new Error(fallback.error?.message || primary.error?.message || 'Falha no upload');
-        }
-        publicUrl = supabase.storage
-          .from('product-photos')
-          .getPublicUrl(fallback.data.path).data.publicUrl;
-      }
-
-      setForm(prev =>
-        target === 'desktop'
-          ? { ...prev, desktop_image_url: publicUrl }
-          : { ...prev, mobile_image_url: publicUrl }
-      );
+      const blob = await fetchImageUrlAsBlob(resolveSiteMediaUrl(rawUrl));
+      await processAndUploadBannerBlob(target, blob);
     } catch (err) {
       setModalError(
-        `Erro ao enviar imagem: ${err instanceof Error ? err.message : 'erro inesperado'}`
+        `Não foi possível reajustar a URL atual: ${err instanceof Error ? err.message : 'erro inesperado'}`
       );
-    } finally {
       setUploadingTarget(null);
-      if (target === 'desktop' && desktopFileRef.current) desktopFileRef.current.value = '';
-      if (target === 'mobile' && mobileFileRef.current) mobileFileRef.current.value = '';
     }
   }
 
@@ -668,25 +749,54 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                       className="relative flex items-center justify-center overflow-hidden"
                       style={{
                         backgroundColor: previewTheme.sectionBg,
-                        aspectRatio: previewMode === 'mobile' ? '15 / 16' : '1440 / 520',
+                        aspectRatio: previewMode === 'mobile' ? '15 / 16' : '1920 / 580',
                       }}
                     >
                       {(previewMode === 'mobile' && form.mobile_image_url) ||
                       form.desktop_image_url ? (
-                        <img
-                          src={resolveSiteMediaUrl(
+                        (() => {
+                          const previewSrc = resolveSiteMediaUrl(
                             previewMode === 'mobile' && form.mobile_image_url
                               ? form.mobile_image_url
                               : form.desktop_image_url
-                          )}
-                          alt="Preview arte"
-                          className="w-full h-full object-cover"
-                        />
+                          );
+                          return (
+                            <>
+                              {previewNeedsAmbient && (
+                                <img
+                                  src={previewSrc}
+                                  alt=""
+                                  aria-hidden="true"
+                                  className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl brightness-[0.42] saturate-125 pointer-events-none"
+                                />
+                              )}
+                              <img
+                                src={previewSrc}
+                                alt="Preview arte"
+                                onLoad={e => {
+                                  const img = e.currentTarget;
+                                  if (img.naturalWidth && img.naturalHeight) {
+                                    const srcR = img.naturalWidth / img.naturalHeight;
+                                    const slotR =
+                                      previewMode === 'mobile' ? 750 / 820 : 1920 / 580;
+                                    const diff = Math.max(srcR / slotR, slotR / srcR);
+                                    setPreviewNeedsAmbient(diff > AUTO_COVER_MAX_RATIO_DIFF);
+                                  }
+                                }}
+                                className={
+                                  previewNeedsAmbient
+                                    ? 'relative z-10 w-full h-full object-contain drop-shadow-[0_8px_24px_rgba(0,0,0,0.45)]'
+                                    : 'w-full h-full object-cover'
+                                }
+                              />
+                            </>
+                          );
+                        })()
                       ) : (
                         <div className="text-center text-slate-400 p-6 space-y-1">
                           <ImageIcon size={28} className="mx-auto opacity-60" />
                           <p className="text-xs">
-                            Envie a arte {previewMode === 'mobile' ? 'Mobile (750×820)' : 'Desktop (1440×520)'} abaixo
+                            Envie a arte {previewMode === 'mobile' ? 'Mobile (750×820)' : 'Desktop Tela Cheia (1920×580)'} abaixo
                           </p>
                         </div>
                       )}
@@ -921,90 +1031,191 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                 </div>
               )}
 
-              {/* Image Uploads (Desktop + Optional Mobile) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 border border-slate-200/80 rounded-xl p-4">
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-slate-700">
-                    {form.mode === 'artwork'
-                      ? 'Arte Principal Desktop * (recomendado 1440×520 px)'
-                      : 'Imagem/Arte Lateral Opcional (recomendado 960×720 px)'}
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={form.desktop_image_url}
-                      onChange={e =>
-                        setForm(prev => ({ ...prev, desktop_image_url: e.target.value }))
-                      }
-                      placeholder="https://... ou clique em Enviar"
-                      className="flex-1 min-w-0 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
-                    />
-                    <input
-                      ref={desktopFileRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={e => handleImageUpload('desktop', e)}
-                      className="hidden"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => desktopFileRef.current?.click()}
-                      disabled={uploadingTarget !== null}
-                      className="inline-flex items-center gap-1 bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-medium shrink-0 disabled:opacity-50"
-                    >
-                      {uploadingTarget === 'desktop' ? (
-                        <Loader2 size={14} className="animate-spin" />
-                      ) : (
-                        <Upload size={14} />
-                      )}
-                      Enviar
-                    </button>
+              {/* Image Uploads (Desktop + Optional Mobile) with Auto-Fit to Screen */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200/80">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                    <Wand2 size={14} className="text-amber-600" />
+                    <span>Ajuste Automático à Tela ao Enviar</span>
                   </div>
-                  {form.mode === 'editorial' && (
-                    <p className="text-[11px] text-slate-500">
-                      Deixe em branco para exibir automaticamente o palco interativo dos 3 produtos em destaque.
-                    </p>
-                  )}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { id: 'auto', label: 'Automático (sem cortar)' },
+                        { id: 'contain_blur', label: 'Inteira + fundo ambiente' },
+                        { id: 'cover', label: 'Preencher tudo' },
+                      ] as const
+                    ).map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setFitMode(opt.id)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
+                          fitMode === opt.id
+                            ? 'bg-amber-500 text-white border-amber-500'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Arte Mobile Opcional (recomendado 750×820 px)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={form.mobile_image_url}
-                      onChange={e =>
-                        setForm(prev => ({ ...prev, mobile_image_url: e.target.value }))
-                      }
-                      placeholder="Opcional: se vazio, usa a imagem Desktop"
-                      className="flex-1 min-w-0 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
-                    />
-                    <input
-                      ref={mobileFileRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={e => handleImageUpload('mobile', e)}
-                      className="hidden"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => mobileFileRef.current?.click()}
-                      disabled={uploadingTarget !== null}
-                      className="inline-flex items-center gap-1 border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-medium shrink-0 disabled:opacity-50"
-                    >
-                      {uploadingTarget === 'mobile' ? (
-                        <Loader2 size={14} className="animate-spin" />
-                      ) : (
-                        <Upload size={14} />
-                      )}
-                      Enviar
-                    </button>
+                {fitMode === 'cover' && (
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
+                    <span className="font-medium">Foco vertical do recorte:</span>
+                    {(
+                      [
+                        { id: 'top', label: 'Topo' },
+                        { id: 'center', label: 'Centro' },
+                        { id: 'bottom', label: 'Base' },
+                      ] as const
+                    ).map(f => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setFocalY(f.id)}
+                        className={`px-2 py-0.5 rounded border text-[11px] ${
+                          focalY === f.id
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
                   </div>
-                  <p className="text-[11px] text-slate-500">
-                    Evita texto cortado no celular quando usar arte gráfica do Canva.
-                  </p>
+                )}
+
+                {form.mode === 'artwork' && (
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoGenerateMobile}
+                      onChange={e => setAutoGenerateMobile(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-amber-500 rounded"
+                    />
+                    Gerar e ajustar automaticamente a versão <strong>Mobile (750×820)</strong> ao subir a arte Desktop
+                  </label>
+                )}
+
+                {autoFitNotice && (
+                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-3 py-2 text-xs flex items-center gap-2">
+                    <Check size={14} className="shrink-0 text-emerald-600" />
+                    <span>{autoFitNotice}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        {form.mode === 'artwork'
+                          ? 'Arte Principal Desktop * (1920×580 tela cheia auto)'
+                          : 'Imagem/Arte Lateral Opcional (960×720 auto)'}
+                      </label>
+                      {form.desktop_image_url.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => handleRefitExistingImage('desktop')}
+                          disabled={uploadingTarget !== null}
+                          title="Reprocessa a foto atual ajustando à proporção da tela sem cortar textos"
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 hover:text-amber-800 disabled:opacity-50"
+                        >
+                          <Wand2 size={11} /> Reajustar à tela
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={form.desktop_image_url}
+                        onChange={e =>
+                          setForm(prev => ({ ...prev, desktop_image_url: e.target.value }))
+                        }
+                        placeholder="https://... ou clique em Enviar"
+                        className="flex-1 min-w-0 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                      <input
+                        ref={desktopFileRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={e => handleImageUpload('desktop', e)}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => desktopFileRef.current?.click()}
+                        disabled={uploadingTarget !== null}
+                        className="inline-flex items-center gap-1 bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-medium shrink-0 disabled:opacity-50"
+                      >
+                        {uploadingTarget === 'desktop' ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Upload size={14} />
+                        )}
+                        Enviar
+                      </button>
+                    </div>
+                    {form.mode === 'editorial' && (
+                      <p className="text-[11px] text-slate-500">
+                        Deixe em branco para exibir automaticamente o palco interativo dos 3 produtos em destaque.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Arte Mobile Opcional (750×820 auto)
+                      </label>
+                      {form.mobile_image_url.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => handleRefitExistingImage('mobile')}
+                          disabled={uploadingTarget !== null}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 hover:text-amber-800 disabled:opacity-50"
+                        >
+                          <Wand2 size={11} /> Reajustar à tela
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={form.mobile_image_url}
+                        onChange={e =>
+                          setForm(prev => ({ ...prev, mobile_image_url: e.target.value }))
+                        }
+                        placeholder="Gerada automaticamente ao subir Desktop"
+                        className="flex-1 min-w-0 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                      <input
+                        ref={mobileFileRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={e => handleImageUpload('mobile', e)}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => mobileFileRef.current?.click()}
+                        disabled={uploadingTarget !== null}
+                        className="inline-flex items-center gap-1 border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-medium shrink-0 disabled:opacity-50"
+                      >
+                        {uploadingTarget === 'mobile' ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Upload size={14} />
+                        )}
+                        Enviar
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Fotos quadradas ou verticais são ajustadas automaticamente sem cortar textos no celular ou desktop.
+                    </p>
+                  </div>
                 </div>
               </div>
 

@@ -43,6 +43,7 @@ import {
   isMissingSiteProductsTableError,
   normalizeItemCode,
   parseSitePriceInput,
+  resolveSiteMediaUrl,
   resolveSiteProductItemCode,
   slugifySiteProduct,
   stripItemCodeTag,
@@ -125,6 +126,8 @@ export default function SiteCatalogPage({
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [modalError, setModalError] = useState('');
+  const [previewImgError, setPreviewImgError] = useState(false);
+  const [brokenThumbIds, setBrokenThumbIds] = useState<Set<string>>(new Set());
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Delete confirmation
@@ -161,6 +164,10 @@ export default function SiteCatalogPage({
   useEffect(() => {
     setPage(1);
   }, [search, categoryFilter, statusFilter]);
+
+  useEffect(() => {
+    setPreviewImgError(false);
+  }, [form.image_url, modalOpen]);
 
   async function loadCatalog() {
     setLoading(true);
@@ -225,6 +232,7 @@ export default function SiteCatalogPage({
     }
 
     setItems(all);
+    setBrokenThumbIds(new Set());
     setLoading(false);
   }
 
@@ -812,13 +820,18 @@ export default function SiteCatalogPage({
                       >
                         {/* Thumbnail */}
                         <div className="w-12 h-12 rounded-lg bg-white border border-slate-200 p-1 flex items-center justify-center shrink-0 overflow-hidden">
-                          {item.image_url ? (
+                          {item.image_url && !brokenThumbIds.has(item.id) ? (
                             <img
-                              src={item.image_url}
+                              src={resolveSiteMediaUrl(item.image_url)}
                               alt={item.title}
+                              loading="lazy"
                               className="max-w-full max-h-full object-contain"
-                              onError={e => {
-                                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                              onError={() => {
+                                setBrokenThumbIds(prev => {
+                                  const next = new Set(prev);
+                                  next.add(item.id);
+                                  return next;
+                                });
                               }}
                             />
                           ) : (
@@ -1107,9 +1120,14 @@ export default function SiteCatalogPage({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <div className="w-16 h-16 rounded-lg bg-white border border-slate-200 p-1.5 flex items-center justify-center shrink-0">
-                    {form.image_url ? (
-                      <img src={form.image_url} alt="Prévia" className="max-w-full max-h-full object-contain" />
+                  <div className="w-16 h-16 rounded-lg bg-white border border-slate-200 p-1.5 flex items-center justify-center shrink-0 overflow-hidden">
+                    {form.image_url && !previewImgError ? (
+                      <img
+                        src={resolveSiteMediaUrl(form.image_url)}
+                        alt="Prévia do produto"
+                        className="max-w-full max-h-full object-contain"
+                        onError={() => setPreviewImgError(true)}
+                      />
                     ) : (
                       <ImageIcon size={20} className="text-slate-300" />
                     )}

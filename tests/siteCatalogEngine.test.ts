@@ -9,6 +9,7 @@ import {
   normalizeItemCode,
   extractItemCodeTag,
   stripItemCodeTag,
+  resolveSiteMediaUrl,
   resolveSiteProductItemCode,
   embedItemCodeInDescription,
   filterSiteProducts,
@@ -129,6 +130,22 @@ test('filterSiteProducts and buildSiteCatalogCsv work cleanly with item_code', (
   assert.ok(csv.includes('MEMO-50-2T;chopeira-small-50;'));
   assert.ok(csv.includes('4490,00'));
   assert.ok(csv.includes('Sob consulta'));
+});
+
+test('resolveSiteMediaUrl prefixes relative /media paths with public site origin while preserving absolute URLs', () => {
+  assert.equal(
+    resolveSiteMediaUrl('/media/products/caixa-termica-fest-ice-memo-360-litros.png'),
+    'https://refrimaq-site.onrender.com/media/products/caixa-termica-fest-ice-memo-360-litros.png'
+  );
+  assert.equal(
+    resolveSiteMediaUrl('media/products/barril.png', 'https://refrimaqrs.com.br/'),
+    'https://refrimaqrs.com.br/media/products/barril.png'
+  );
+  assert.equal(
+    resolveSiteMediaUrl('https://jqiktictlttegtyshwsr.supabase.co/storage/v1/object/public/used-items-photos/a.png'),
+    'https://jqiktictlttegtyshwsr.supabase.co/storage/v1/object/public/used-items-photos/a.png'
+  );
+  assert.equal(resolveSiteMediaUrl(''), '');
 });
 
 console.log(`\nAll ${passed} siteCatalogEngine tests passed!`);

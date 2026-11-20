@@ -92,6 +92,35 @@ const BRL_FORMATTER = new Intl.NumberFormat('pt-BR', {
   currency: 'BRL',
 });
 
+export const DEFAULT_PUBLIC_SITE_ORIGIN = 'https://refrimaq-site.onrender.com';
+
+function getConfiguredPublicSiteOrigin(): string {
+  const envOrigin =
+    typeof import.meta !== 'undefined'
+      ? (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_PUBLIC_SITE_URL
+      : undefined;
+  return (envOrigin || DEFAULT_PUBLIC_SITE_ORIGIN).replace(/\/+$/, '');
+}
+
+/**
+ * Resolves product/banner image URLs for preview inside Refrimaq Connect.
+ * Relative paths like `/media/products/...` live on the public website host (`refrimaq-site`),
+ * while absolute `https://` URLs (e.g. Supabase Storage uploads) are returned unchanged.
+ */
+export function resolveSiteMediaUrl(
+  rawUrl: string | null | undefined,
+  publicSiteOrigin?: string
+): string {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return '';
+  if (/^(?:https?:\/\/|data:|blob:|\/\/)/i.test(trimmed)) {
+    return trimmed;
+  }
+  const origin = (publicSiteOrigin ?? getConfiguredPublicSiteOrigin()).replace(/\/+$/, '');
+  const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${origin}${path}`;
+}
+
 export function getSiteCategoryLabel(id: string): string {
   return SITE_CATEGORIES.find(c => c.id === id)?.label ?? 'Peças e Acessórios';
 }

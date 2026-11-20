@@ -23,7 +23,7 @@ import {
   Files,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { SITE_CATEGORIES, slugifySiteProduct } from '../lib/siteCatalogEngine';
+import { SITE_CATEGORIES, resolveSiteMediaUrl, slugifySiteProduct } from '../lib/siteCatalogEngine';
 import {
   BANNER_ACTION_LABELS,
   BANNER_QUICK_TEMPLATES,
@@ -446,7 +446,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                 >
                   {row.mode === 'artwork' && row.desktop_image_url ? (
                     <img
-                      src={row.desktop_image_url}
+                      src={resolveSiteMediaUrl(row.desktop_image_url)}
                       alt={row.image_alt || row.name}
                       className="w-full h-32 object-cover rounded-lg border border-white/10"
                     />
@@ -473,7 +473,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                       </div>
                       {row.desktop_image_url && (
                         <img
-                          src={row.desktop_image_url}
+                          src={resolveSiteMediaUrl(row.desktop_image_url)}
                           alt={row.image_alt || row.name}
                           className="w-24 h-20 object-cover rounded-lg border border-white/15 shrink-0"
                         />
@@ -674,11 +674,11 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                       {(previewMode === 'mobile' && form.mobile_image_url) ||
                       form.desktop_image_url ? (
                         <img
-                          src={
+                          src={resolveSiteMediaUrl(
                             previewMode === 'mobile' && form.mobile_image_url
                               ? form.mobile_image_url
                               : form.desktop_image_url
-                          }
+                          )}
                           alt="Preview arte"
                           className="w-full h-full object-cover"
                         />
@@ -750,7 +750,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                         <div className="bg-slate-900/90 border border-white/10 rounded-xl p-2 aspect-[4/3] flex items-center justify-center overflow-hidden">
                           {form.desktop_image_url ? (
                             <img
-                              src={form.desktop_image_url}
+                              src={resolveSiteMediaUrl(form.desktop_image_url)}
                               alt="Preview lateral"
                               className="w-full h-full object-cover rounded-lg"
                             />

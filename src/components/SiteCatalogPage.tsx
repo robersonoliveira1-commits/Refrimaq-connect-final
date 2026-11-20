@@ -21,9 +21,11 @@ import {
   RotateCcw,
   Sparkles,
   Image as ImageIcon,
+  Wrench,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Header from './Header';
+import SiteVisitsTab from './SiteVisitsTab';
 import {
   SITE_CATEGORIES,
   SITE_PRODUCTS_SETUP_SQL,
@@ -43,6 +45,8 @@ import { getLocalTodayFileStamp } from '../lib/customersEngine';
 
 interface SiteCatalogPageProps {
   onMenuClick: () => void;
+  onOpenWorkshopOrder: (orderId: string) => void;
+  onSelectCustomer: (customerId: string) => void;
 }
 
 interface ProductFormState {
@@ -79,7 +83,13 @@ const BLANK_FORM: ProductFormState = {
 
 const ITEMS_PER_PAGE = 24;
 
-export default function SiteCatalogPage({ onMenuClick }: SiteCatalogPageProps) {
+export default function SiteCatalogPage({
+  onMenuClick,
+  onOpenWorkshopOrder,
+  onSelectCustomer,
+}: SiteCatalogPageProps) {
+  const [activeTab, setActiveTab] = useState<'catalog' | 'visits'>('catalog');
+  const [newVisitsCount, setNewVisitsCount] = useState(0);
   const [items, setItems] = useState<SiteProductRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [missingTable, setMissingTable] = useState(false);
@@ -110,6 +120,16 @@ export default function SiteCatalogPage({ onMenuClick }: SiteCatalogPageProps) {
 
   useEffect(() => {
     loadCatalog();
+    // Lightweight badge count for new technical visit requests from the public site
+    supabase
+      .from('service_requests')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'novo')
+      .then(({ count, error }) => {
+        if (!error && typeof count === 'number') {
+          setNewVisitsCount(count);
+        }
+      });
   }, []);
 
   useEffect(() => {
@@ -416,11 +436,15 @@ export default function SiteCatalogPage({ onMenuClick }: SiteCatalogPageProps) {
   return (
     <div className="flex flex-col h-full">
       <Header
-        title="Catálogo do Site"
-        subtitle="Gerencie os produtos exibidos no site público refrimaqrs.com.br em tempo real"
+        title="Site Refrimaq"
+        subtitle={
+          activeTab === 'catalog'
+            ? 'Gerencie os produtos exibidos no site público refrimaqrs.com.br em tempo real'
+            : 'Agendamentos de visita técnica recebidos pelo site (Corretivo, Sanitização e Projetos)'
+        }
         onMenuClick={onMenuClick}
         actions={
-          !missingTable && (
+          activeTab === 'catalog' && !missingTable && (
             <div className="flex items-center gap-2">
               {items.length > 0 && (
                 <button
@@ -444,6 +468,52 @@ export default function SiteCatalogPage({ onMenuClick }: SiteCatalogPageProps) {
       />
 
       <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
+        {/* Sub-tab Switcher: Catálogo vs Visitas Técnicas */}
+        <div className="flex flex-wrap items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+          <button
+            type="button"
+            onClick={() => setActiveTab('catalog')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'catalog'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Globe size={16} />
+            Catálogo
+            {items.length > 0 && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 tabular-nums">
+                {items.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('visits')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'visits'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Wrench size={16} />
+            Visitas Técnicas
+            {newVisitsCount > 0 && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-500 text-white font-semibold tabular-nums">
+                {newVisitsCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {activeTab === 'visits' ? (
+          <SiteVisitsTab
+            onOpenWorkshopOrder={onOpenWorkshopOrder}
+            onSelectCustomer={onSelectCustomer}
+            onNewCountChange={setNewVisitsCount}
+          />
+        ) : (
+          <>
         {errorMsg && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm flex items-center justify-between gap-3">
             <span>{errorMsg}</span>
@@ -751,6 +821,8 @@ export default function SiteCatalogPage({ onMenuClick }: SiteCatalogPageProps) {
                 </>
               )}
             </div>
+          </>
+        )}
           </>
         )}
       </div>

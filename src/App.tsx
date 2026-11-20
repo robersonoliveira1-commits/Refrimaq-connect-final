@@ -226,7 +226,11 @@ function AdminApp() {
         )}
 
         {page === 'site-catalog' && (
-          <SiteCatalogPage onMenuClick={() => setSidebarOpen(true)} />
+          <SiteCatalogPage
+            onMenuClick={() => setSidebarOpen(true)}
+            onOpenWorkshopOrder={handleOpenWorkshopOrder}
+            onSelectCustomer={handleSelectCustomer}
+          />
         )}
       </main>
 
@@ -257,13 +261,13 @@ function AdminApp() {
   );
 }
 
-class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null, info: any}> {
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null, info: React.ErrorInfo | null}> {
   constructor(props: {children: React.ReactNode}) {
     super(props);
     this.state = { hasError: false, error: null, info: null };
   }
   static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
-  componentDidCatch(error: Error, info: any) { this.setState({ error, info }); }
+  componentDidCatch(error: Error, info: React.ErrorInfo) { this.setState({ error, info }); }
   render() {
     if (this.state.hasError) {
       return (

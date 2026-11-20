@@ -19,7 +19,7 @@ const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = 
   { page: 'workshop',  label: 'Oficina',           icon: Wrench },
   { page: 'sales',     label: 'Venda de Usados',   icon: ShoppingCart },
   { page: 'parts',        label: 'Peças e Serviços',  icon: Boxes },
-  { page: 'site-catalog', label: 'Catálogo do Site',  icon: Globe },
+  { page: 'site-catalog', label: 'Site Refrimaq',     icon: Globe },
   { page: 'finance',      label: 'Financeiro',        icon: Banknote },
   { page: 'team',      label: 'Equipe',            icon: UsersRound },
   { page: 'backup',    label: 'Backup',            icon: Database },

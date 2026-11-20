@@ -45,7 +45,7 @@ test('parseSitePriceInput supports BR decimal, dot decimal, and empty (sob consu
 
 test('suggestSiteSpecs extracts flow, taps, and voltage cleanly', () => {
   assert.equal(suggestSiteSpecs('Chopeira Elétrica Advantage 70L/h - 2 Torneiras'), '70 L/h · 2 vias');
-  assert.equal(suggestSiteSpecs('Barril 30L Slim'), '30 L');
+  assert.equal(suggestSiteSpecs('Caixa Térmica Fest Ice Memo 50L'), '50 L');
 });
 
 test('isMissingSiteProductsTableError detects PostgREST and Postgres missing-table errors', () => {
@@ -101,16 +101,16 @@ test('filterSiteProducts and buildSiteCatalogCsv work cleanly with item_code', (
     },
     {
       id: '2',
-      slug: 'barril-30l',
+      slug: 'torre-naja-memo',
       item_code: '',
-      title: 'Barril 30L Slim',
-      category_id: 'barris',
-      category_label: 'Barris Kegsbrasil',
-      brand: 'Kegsbrasil',
+      title: 'Torre Naja Plus Memo 2 Torneiras',
+      category_id: 'torres',
+      category_label: 'Torres de Chopp',
+      brand: 'Memo',
       price: null,
-      specs: '30 L',
-      description: 'Inox 304.',
-      image_url: '/media/products/barril.png',
+      specs: '2 vias',
+      description: 'Acabamento em inox 304.',
+      image_url: '/media/products/torre-naja.png',
       featured: false,
       active: false,
       sort_order: 2,

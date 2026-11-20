@@ -3,7 +3,6 @@ export type SiteCategoryId =
   | 'chopeiras-gelo'
   | 'torres'
   | 'pre-resfriadores'
-  | 'barris'
   | 'gela-canecas'
   | 'acessorios';
 
@@ -36,7 +35,6 @@ export const SITE_CATEGORIES: SiteCategoryOption[] = [
   { id: 'chopeiras-gelo', label: 'Chopeiras a Gelo' },
   { id: 'torres', label: 'Torres de Chopp' },
   { id: 'pre-resfriadores', label: 'Pré-Resfriadores' },
-  { id: 'barris', label: 'Barris Kegsbrasil' },
   { id: 'gela-canecas', label: 'Gela Canecas' },
   { id: 'acessorios', label: 'Peças e Acessórios' },
 ];
@@ -182,9 +180,9 @@ export function suggestSiteSpecs(title: string, description = ''): string {
   }
 
   if (parts.length === 0) {
-    if (/barril/i.test(source)) parts.push('Inox 304');
-    else if (/gela caneca/i.test(source)) parts.push('Ultracongelador');
+    if (/gela caneca/i.test(source)) parts.push('Ultracongelador');
     else if (/torre/i.test(source)) parts.push('Torre Memo');
+    else if (/inox/i.test(source)) parts.push('Inox 304');
     else parts.push('Linha Memo');
   }
 

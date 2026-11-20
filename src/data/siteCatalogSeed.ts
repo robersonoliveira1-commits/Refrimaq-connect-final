@@ -1,6 +1,6 @@
 import { SiteProductRow } from '../lib/siteCatalogEngine';
 
-export const SITE_CATALOG_SEED: Array<Omit<SiteProductRow, 'id'>> = [
+export const SITE_CATALOG_SEED: Array<Omit<SiteProductRow, 'id' | 'item_code'>> = [
   {
     "slug": "caixa-termica-fest-ice-memo-360-litros",
     "title": "Caixa Térmica Fest Ice Memo - 360 Litros",
@@ -70,104 +70,6 @@ export const SITE_CATALOG_SEED: Array<Omit<SiteProductRow, 'id'>> = [
     "featured": true,
     "active": true,
     "sort_order": 5
-  },
-  {
-    "slug": "barril-de-10l-slim",
-    "title": "Barril de 10L Slim",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "10 L",
-    "description": "Descrição: Barril de 10L Slim. Barris Slim, ocupam menos espaço no empilhamento por...",
-    "image_url": "/media/products/barril-de-10l-slim.png",
-    "featured": true,
-    "active": true,
-    "sort_order": 6
-  },
-  {
-    "slug": "barril-de-15l-slim",
-    "title": "Barril de 15L Slim",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "15 L",
-    "description": "Descrição: Barril de 15L Slim. Barris Slim, ocupam menos espaço no empilhamento por...",
-    "image_url": "/media/products/barril-de-15l-slim.png",
-    "featured": false,
-    "active": true,
-    "sort_order": 7
-  },
-  {
-    "slug": "barril-de-20l-slim",
-    "title": "Barril de 20L Slim",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "20 L",
-    "description": "Descrição: Barril de 20L Slim. Barris Slim, ocupam menos espaço no empilhamento por...",
-    "image_url": "/media/products/barril-de-20l-slim.png",
-    "featured": true,
-    "active": true,
-    "sort_order": 8
-  },
-  {
-    "slug": "barril-de-30l-slim",
-    "title": "Barril de 30L Slim",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "30 L",
-    "description": "Descrição: Barril de 30L Slim. Barris Slim, ocupam menos espaço no empilhamento por...",
-    "image_url": "/media/products/barril-de-30l-slim.png",
-    "featured": true,
-    "active": true,
-    "sort_order": 9
-  },
-  {
-    "slug": "barril-de-20l-euro",
-    "title": "Barril de 20L Euro",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "20 L",
-    "description": "Descrição: Barril de 20L Euro. Barris redondos, ideais para um empilhamento...",
-    "image_url": "/media/products/barril-de-20l-euro.png",
-    "featured": false,
-    "active": true,
-    "sort_order": 10
-  },
-  {
-    "slug": "barril-de-30l-euro",
-    "title": "Barril de 30L Euro",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "30 L",
-    "description": "Descrição: Barril de 30L Euro. Barris redondos, ideais para um empilhamento...",
-    "image_url": "/media/products/barril-de-30l-euro.png",
-    "featured": false,
-    "active": true,
-    "sort_order": 11
-  },
-  {
-    "slug": "barril-de-50l-euro",
-    "title": "Barril de 50L Euro",
-    "category_id": "barris",
-    "category_label": "Barris Kegsbrasil",
-    "brand": "Kegsbrasil",
-    "price": null,
-    "specs": "50 L",
-    "description": "Descrição:Barril de 50L Euro. Barris redondos, ideais para um empilhamento...",
-    "image_url": "/media/products/barril-de-50l-euro.png",
-    "featured": true,
-    "active": true,
-    "sort_order": 12
   },
   {
     "slug": "abracadera-orelha-inox-14-5mm",

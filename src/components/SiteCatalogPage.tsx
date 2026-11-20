@@ -687,7 +687,7 @@ export default function SiteCatalogPage({
                     Tabela pronta — importe os {SITE_CATALOG_SEED.length} produtos iniciais
                   </h2>
                   <p className="text-sm text-amber-800">
-                    Carregue automaticamente todo o catálogo atual da Refrimaq (chopeiras, torres, pré-resfriadores, barris Kegsbrasil e peças) com 1 clique para começar a editar.
+                    Carregue automaticamente todo o catálogo atual da Refrimaq (chopeiras, torres, pré-resfriadores, gela canecas e peças) com 1 clique para começar a editar.
                   </p>
                   {seedProgress && <p className="text-xs font-semibold text-amber-700 pt-1">{seedProgress}</p>}
                 </div>
@@ -1008,7 +1008,7 @@ export default function SiteCatalogPage({
                     type="text"
                     value={form.brand}
                     onChange={e => setForm(prev => ({ ...prev, brand: e.target.value }))}
-                    placeholder="Memo, Kegsbrasil, Celli..."
+                    placeholder="Memo, Celli, Italiana..."
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                 </div>

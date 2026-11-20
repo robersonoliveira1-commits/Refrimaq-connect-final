@@ -131,7 +131,7 @@ export const BLANK_BANNER_DRAFT: BannerFormDraft = {
   name: '',
   mode: 'editorial',
   theme_preset: 'default',
-  eyebrow: 'Representante exclusiva Memo no RS · Barris Kegsbrasil',
+  eyebrow: 'Representante exclusiva Memo no RS · Assistência técnica',
   headline: '',
   subtitle: '',
   badge_text: '',
@@ -162,7 +162,7 @@ export const BANNER_QUICK_TEMPLATES: {
       mode: 'editorial',
       theme_preset: 'black_friday',
       badge_text: 'BLACK FRIDAY · CONDIÇÕES ESPECIAIS',
-      eyebrow: 'Linha Memo & Kegsbrasil · Estoque promocional',
+      eyebrow: 'Linha oficial Memo · Estoque promocional',
       headline: 'Black Friday em chopeiras elétricas e torres Memo',
       subtitle:
         'Descontos exclusivos à vista e parcelamento em até 10x sem juros com entrega para todo o Brasil.',
@@ -184,7 +184,7 @@ export const BANNER_QUICK_TEMPLATES: {
       eyebrow: 'Chopp gelado para confraternizações e festas',
       headline: 'Prepare seu espaço para o Natal e Ano Novo',
       subtitle:
-        'Chopeiras residenciais, barris de aço inox e agendamento de sanitização preventiva para as festas.',
+        'Chopeiras residenciais, torres de chopp e agendamento de sanitização preventiva para as festas.',
       announcement_bar: 'Especial de Fim de Ano Refrimaq · Garanta sua chopeira ou assepsia antes das festas',
       cta_label: 'Explorar linha festiva',
       secondary_cta_label: 'Falar no WhatsApp',

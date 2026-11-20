@@ -1,28 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
-import { calculateOrderFinancials } from '../lib/osStockSync';
-import { Search, Loader2, FileSpreadsheet, Calendar, AlertCircle } from 'lucide-react';
-
-interface OSPart {
-  product_id: string | null;
-  quantity: number;
-  unit_price: number;
-}
-
-interface ServiceOrder {
-  id: string;
-  order_number: number;
-  status: string;
-  visit_type: string;
-  labor_cost: number | null;
-  equip_type: string | null;
-  equip_model: string | null;
-  equip_serial: string | null;
-  diagnosis: string | null;
-  created_at: string;
-  customers: { name: string } | null;
-  service_order_parts: OSPart[];
-}
+import { getLocalTodayFileStamp } from '../lib/customersEngine';
+import {
+  ProductStockMeta,
+  WorkshopReportOrder,
+  buildWorkshopReportWorkbook,
+  calculateWorkshopOrderFinancials,
+  computeWorkshopReportSummary,
+  matchesLocalDateRange,
+  matchesWorkshopOrderSearch,
+  parseMultiOsQuery,
+} from '../lib/workshopReportExport';
+import { Search, Loader2, FileSpreadsheet, Calendar, AlertCircle, AlertTriangle, CheckSquare, Square, X } from 'lucide-react';
 
 const ALL_STATUSES = [
   'Triagem',
@@ -48,61 +38,91 @@ const STATUS_COLOR: Record<string, string> = {
   'Cancelada': 'bg-red-50 text-red-700 border-red-200',
 };
 
+async function loadAllProductsMeta(): Promise<Record<string, ProductStockMeta>> {
+  const map: Record<string, ProductStockMeta> = {};
+  const PAGE_SIZE = 1000;
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('products')
+      .select('id, name, category, unit, stock_quantity')
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error || !data || data.length === 0) {
+      hasMore = false;
+    } else {
+      for (const p of data as ProductStockMeta[]) {
+        map[p.id] = p;
+      }
+      from += PAGE_SIZE;
+      if (data.length < PAGE_SIZE) hasMore = false;
+    }
+  }
+  return map;
+}
+
 export default function WorkshopReportTab() {
-  const [orders, setOrders] = useState<ServiceOrder[]>([]);
+  const [orders, setOrders] = useState<WorkshopReportOrder[]>([]);
+  const [productsById, setProductsById] = useState<Record<string, ProductStockMeta>>({});
   const [loading, setLoading] = useState(true);
-  
-  // Filters
+
+  // Filters & manual selection
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    loadReportData();
-  }, []);
-
-  async function loadReportData() {
+  const loadReportData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('service_orders')
-        .select(`
-          id,
-          order_number,
-          status,
-          visit_type,
-          labor_cost,
-          equip_type,
-          equip_model,
-          equip_serial,
-          diagnosis,
-          created_at,
-          customers (name),
-          service_order_parts (
-            product_id,
-            quantity,
-            unit_price
-          )
-        `)
-        .order('order_number', { ascending: false });
+      const [ordersRes, productsMap] = await Promise.all([
+        supabase
+          .from('service_orders')
+          .select(`
+            id,
+            order_number,
+            status,
+            visit_type,
+            labor_cost,
+            equip_type,
+            equip_brand,
+            equip_model,
+            equip_serial,
+            equip_voltage,
+            diagnosis,
+            created_at,
+            customers (name),
+            service_order_parts (
+              product_id,
+              part_name,
+              quantity,
+              unit_price
+            )
+          `)
+          .order('order_number', { ascending: false }),
+        loadAllProductsMeta(),
+      ]);
 
-      if (error) throw error;
-      setOrders((data as unknown as ServiceOrder[]) ?? []);
+      if (ordersRes.error) throw ordersRes.error;
+      setOrders((ordersRes.data as unknown as WorkshopReportOrder[]) ?? []);
+      setProductsById(productsMap);
     } catch (err) {
       console.error('Error fetching report data:', err);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    loadReportData();
+  }, [loadReportData]);
 
   // Calculate totals for a specific order using the unified formula
-  const getOrderTotals = (order: ServiceOrder) => {
-    const { partsTotal, laborCost, grandTotal } = calculateOrderFinancials(
-      order.service_order_parts ?? [],
-      order.labor_cost,
-      true
-    );
+  const getOrderTotals = (order: WorkshopReportOrder) => {
+    const { partsTotal, laborCost, grandTotal } = calculateWorkshopOrderFinancials(order);
 
     return {
       partsTotal,
@@ -111,113 +131,68 @@ export default function WorkshopReportTab() {
     };
   };
 
-  // Filtered orders
-  const filtered = orders.filter(o => {
-    // Status Filter
-    const matchStatus = statusFilter === 'all' || o.status === statusFilter;
+  const multiOsActive = useMemo(() => parseMultiOsQuery(search), [search]);
 
-    // Date Filter
-    let matchDate = true;
-    if (startDate || endDate) {
-      const orderDate = new Date(o.created_at);
-      // Strip time for clean date comparisons
-      orderDate.setHours(0, 0, 0, 0);
+  // Filtered orders (supports multi-OS list paste and local date comparison without UTC shift)
+  const filtered = useMemo(
+    () =>
+      orders.filter(o => {
+        const matchStatus = statusFilter === 'all' || o.status === statusFilter;
+        const matchDate = matchesLocalDateRange(o.created_at, startDate, endDate);
+        const matchSearch = matchesWorkshopOrderSearch(o, search);
+        return matchStatus && matchDate && matchSearch;
+      }),
+    [orders, statusFilter, startDate, endDate, search]
+  );
 
-      if (startDate) {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        if (orderDate < start) matchDate = false;
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        if (orderDate > end) matchDate = false;
-      }
+  // Target orders for export: manually checked rows (within current filter) OR all filtered rows
+  const exportTargets = useMemo(() => {
+    if (selectedIds.size === 0) return filtered;
+    const picked = filtered.filter(o => selectedIds.has(o.id));
+    return picked.length > 0 ? picked : filtered;
+  }, [filtered, selectedIds]);
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every(o => selectedIds.has(o.id));
+
+  function toggleSelectOrder(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllFiltered() {
+    if (allFilteredSelected) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        for (const o of filtered) next.delete(o.id);
+        return next;
+      });
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        for (const o of filtered) next.add(o.id);
+        return next;
+      });
     }
+  }
 
-    // Text Search
-    const q = search.toLowerCase();
-    const matchSearch = !q
-      || String(o.order_number).includes(q)
-      || (o.customers?.name ?? '').toLowerCase().includes(q)
-      || (o.equip_model ?? '').toLowerCase().includes(q)
-      || (o.equip_serial ?? '').toLowerCase().includes(q)
-      || (o.visit_type ?? '').toLowerCase().includes(q)
-      || (o.equip_type ?? '').toLowerCase().includes(q)
-      || (o.diagnosis ?? '').toLowerCase().includes(q);
-
-    return matchStatus && matchDate && matchSearch;
-  });
-
-  // Calculate accumulated totals of filtered rows
-  const summary = filtered.reduce(
-    (acc, o) => {
-      const { partsTotal, servicesTotal, grandTotal } = getOrderTotals(o);
-      acc.parts += partsTotal;
-      acc.services += servicesTotal;
-      acc.grand += grandTotal;
-      return acc;
-    },
-    { parts: 0, services: 0, grand: 0 }
+  const summary = useMemo(
+    () => computeWorkshopReportSummary(exportTargets, productsById),
+    [exportTargets, productsById]
   );
 
   const formatCurrency = (val: number) => {
     return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   };
 
-  const handleExportCSV = () => {
-    if (filtered.length === 0) return;
-
-    // Excel compatibility setup: semicolons as separators and UTF-8 BOM
-    const headers = [
-      'OS',
-      'Cliente',
-      'Tipo Visita',
-      'Tipo Equipamento',
-      'Modelo',
-      'Nº Série',
-      'Status',
-      'Diagnóstico',
-      'Total Peças',
-      'Total Serviços',
-      'Valor Total OS',
-      'Data de Criação'
-    ];
-
-    const rows = filtered.map(o => {
-      const { partsTotal, servicesTotal, grandTotal } = getOrderTotals(o);
-      const cleanDiagnosis = (o.diagnosis || '').replace(/[\r\n\t]+/g, ' ').replace(/"/g, '""');
-      
-      return [
-        `#${String(o.order_number).padStart(4, '0')}`,
-        o.customers?.name || '',
-        o.visit_type || '',
-        o.equip_type || '',
-        o.equip_model || '',
-        o.equip_serial || '',
-        o.status || '',
-        `"${cleanDiagnosis}"`,
-        partsTotal.toFixed(2).replace('.', ','),
-        servicesTotal.toFixed(2).replace('.', ','),
-        grandTotal.toFixed(2).replace('.', ','),
-        new Date(o.created_at).toLocaleDateString('pt-BR')
-      ];
-    });
-
-    const csvContent = [
-      headers.join(';'),
-      ...rows.map(r => r.join(';'))
-    ].join('\r\n');
-
-    // Add BOM for UTF-8 Excel support
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `relatorio_os_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportExcel = () => {
+    if (exportTargets.length === 0) return;
+    const wb = buildWorkshopReportWorkbook(exportTargets, productsById);
+    XLSX.writeFile(wb, `relatorio_os_${getLocalTodayFileStamp()}.xlsx`);
   };
 
   return (
@@ -241,8 +216,7 @@ export default function WorkshopReportTab() {
             {ALL_STATUSES.map(status => {
               const count = filtered.filter(o => o.status === status).length;
               const percentage = filtered.length > 0 ? (count / filtered.length) * 100 : 0;
-              
-              // Color config mapping
+
               const barColor = {
                 'Triagem': 'bg-slate-400',
                 'Em Diagnóstico': 'bg-sky-500',
@@ -277,16 +251,26 @@ export default function WorkshopReportTab() {
       {/* Filter panel */}
       <div className="bg-white border-b border-slate-200 p-4 sm:p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          {/* Text Search */}
+          {/* Text & Multi-OS Search */}
           <div className="relative">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar OS, cliente, modelo, série..."
+              placeholder="Buscar cliente, modelo ou colar OSs (#0178 #0170)..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400"
+              className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                aria-label="Limpar busca"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           {/* Status Filter */}
@@ -328,18 +312,51 @@ export default function WorkshopReportTab() {
         </div>
 
         {/* Action / Quick Info Row */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-100">
-          <div className="text-sm text-slate-500">
-            Mostrando <span className="font-semibold text-slate-700">{filtered.length}</span> de{' '}
-            <span className="font-semibold text-slate-700">{orders.length}</span> ordens de serviço
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-slate-500">
+            <span>
+              Mostrando <span className="font-semibold text-slate-700">{filtered.length}</span> de{' '}
+              <span className="font-semibold text-slate-700">{orders.length}</span> ordens de serviço
+            </span>
+            {multiOsActive && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-sky-100 text-sky-800">
+                Lote multi-OS ({multiOsActive.size} códigos)
+              </span>
+            )}
+            {selectedIds.size > 0 && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                {exportTargets.length} selecionada(s)
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  className="hover:text-amber-950 underline"
+                >
+                  Limpar
+                </button>
+              </span>
+            )}
+            {exportTargets.length > 0 && (
+              <span className="text-xs text-slate-500">
+                · 3 abas Excel ({summary.materialsDistinctCount} materiais · {summary.servicesDistinctCount} serviços)
+              </span>
+            )}
+            {summary.voltageAlertsCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                <AlertTriangle size={12} />
+                {summary.voltageAlertsCount} alerta(s) 110V×220V na Aba 2
+              </span>
+            )}
           </div>
+
           <button
-            onClick={handleExportCSV}
-            disabled={filtered.length === 0}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm w-full sm:w-auto justify-center"
+            onClick={handleExportExcel}
+            disabled={exportTargets.length === 0}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm w-full lg:w-auto justify-center shrink-0"
           >
             <FileSpreadsheet size={16} />
-            Exportar Planilha
+            {selectedIds.size > 0
+              ? `Exportar Planilha (${exportTargets.length} OSs · 3 Abas)`
+              : 'Exportar Planilha (.xlsx · 3 Abas)'}
           </button>
         </div>
       </div>
@@ -361,7 +378,17 @@ export default function WorkshopReportTab() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="px-4 py-3.5">OS</th>
+                  <th className="pl-4 pr-2 py-3.5 w-10">
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllFiltered}
+                      title={allFilteredSelected ? 'Desmarcar todas filtradas' : 'Selecionar todas filtradas'}
+                      className="text-slate-400 hover:text-amber-600 flex items-center"
+                    >
+                      {allFilteredSelected ? <CheckSquare size={16} className="text-amber-600" /> : <Square size={16} />}
+                    </button>
+                  </th>
+                  <th className="px-3 py-3.5">OS</th>
                   <th className="px-4 py-3.5">Cliente</th>
                   <th className="px-4 py-3.5">Tipo</th>
                   <th className="px-4 py-3.5">Modelo</th>
@@ -376,9 +403,23 @@ export default function WorkshopReportTab() {
               <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
                 {filtered.map(o => {
                   const { partsTotal, servicesTotal, grandTotal } = getOrderTotals(o);
+                  const isSelected = selectedIds.has(o.id);
                   return (
-                    <tr key={o.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-4 py-4 font-mono font-bold text-slate-900">
+                    <tr
+                      key={o.id}
+                      className={`hover:bg-slate-50/70 transition-colors ${isSelected ? 'bg-amber-50/40' : ''}`}
+                    >
+                      <td className="pl-4 pr-2 py-4">
+                        <button
+                          type="button"
+                          onClick={() => toggleSelectOrder(o.id)}
+                          aria-label={`Selecionar OS #${String(o.order_number).padStart(4, '0')}`}
+                          className="text-slate-400 hover:text-amber-600 flex items-center"
+                        >
+                          {isSelected ? <CheckSquare size={16} className="text-amber-600" /> : <Square size={16} />}
+                        </button>
+                      </td>
+                      <td className="px-3 py-4 font-mono font-bold text-slate-900">
                         #{String(o.order_number).padStart(4, '0')}
                       </td>
                       <td className="px-4 py-4 font-medium text-slate-800">
@@ -417,17 +458,19 @@ export default function WorkshopReportTab() {
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50/80 border-t-2 border-slate-200 font-bold text-slate-900">
-                  <td colSpan={7} className="px-4 py-4 text-right text-xs uppercase tracking-wider text-slate-500">
-                    Totais Gerais Filtrados:
+                  <td colSpan={8} className="px-4 py-4 text-right text-xs uppercase tracking-wider text-slate-500">
+                    {selectedIds.size > 0
+                      ? `Totais das ${exportTargets.length} OS(s) Selecionadas:`
+                      : 'Totais Gerais Filtrados:'}
                   </td>
                   <td className="px-4 py-4 text-right font-mono text-slate-800">
-                    {formatCurrency(summary.parts)}
+                    {formatCurrency(summary.partsTotal)}
                   </td>
                   <td className="px-4 py-4 text-right font-mono text-slate-800">
-                    {formatCurrency(summary.services)}
+                    {formatCurrency(summary.servicesTotal)}
                   </td>
                   <td className="px-4 py-4 text-right font-mono text-amber-600 text-base">
-                    {formatCurrency(summary.grand)}
+                    {formatCurrency(summary.grandTotal)}
                   </td>
                 </tr>
               </tfoot>

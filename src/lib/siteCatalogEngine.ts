@@ -10,6 +10,7 @@ export type SiteCategoryId =
 export interface SiteProductRow {
   id: string;
   slug: string;
+  item_code: string;
   title: string;
   category_id: SiteCategoryId;
   category_label: string;
@@ -40,10 +41,19 @@ export const SITE_CATEGORIES: SiteCategoryOption[] = [
   { id: 'acessorios', label: 'Peças e Acessórios' },
 ];
 
+export const SITE_PRODUCTS_ADD_ITEM_CODE_SQL = `-- Execute uma vez no SQL Editor do Supabase para criar a coluna oficial item_code
+ALTER TABLE public.site_products
+  ADD COLUMN IF NOT EXISTS item_code text NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_site_products_item_code
+  ON public.site_products (item_code)
+  WHERE item_code <> '';`;
+
 export const SITE_PRODUCTS_SETUP_SQL = `-- Execute uma vez no SQL Editor do Supabase da Refrimaq
 CREATE TABLE IF NOT EXISTS public.site_products (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug text NOT NULL UNIQUE,
+  item_code text NOT NULL DEFAULT '',
   title text NOT NULL,
   category_id text NOT NULL DEFAULT 'acessorios',
   category_label text NOT NULL DEFAULT 'Peças e Acessórios',
@@ -61,6 +71,7 @@ CREATE TABLE IF NOT EXISTS public.site_products (
 
 CREATE INDEX IF NOT EXISTS idx_site_products_active_cat ON public.site_products (active, category_id);
 CREATE INDEX IF NOT EXISTS idx_site_products_featured_sort ON public.site_products (featured DESC, sort_order ASC, title ASC);
+CREATE INDEX IF NOT EXISTS idx_site_products_item_code ON public.site_products (item_code) WHERE item_code <> '';
 
 ALTER TABLE public.site_products ENABLE ROW LEVEL SECURITY;
 
@@ -151,6 +162,54 @@ export function suggestSiteSpecs(title: string, description = ''): string {
   return parts.slice(0, 2).join(' · ');
 }
 
+const ITEM_CODE_TAG_RE = /\s*\[C[oó]d:\s*([^\]]+)\]\s*/gi;
+
+export function normalizeItemCode(raw: string | null | undefined): string {
+  return (raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+export function extractItemCodeTag(description: string | null | undefined): string {
+  const src = description ?? '';
+  const match = src.match(/\[C[oó]d:\s*([^\]]+)\]/i);
+  return match ? normalizeItemCode(match[1]) : '';
+}
+
+export function stripItemCodeTag(description: string | null | undefined): string {
+  return (description ?? '').replace(ITEM_CODE_TAG_RE, ' ').replace(/\s+\n/g, '\n').trim();
+}
+
+export function resolveSiteProductItemCode(rawItemCode: unknown, description: unknown): string {
+  const col = normalizeItemCode(
+    rawItemCode !== null && rawItemCode !== undefined ? String(rawItemCode) : ''
+  );
+  if (col) return col;
+  return extractItemCodeTag(
+    description !== null && description !== undefined ? String(description) : ''
+  );
+}
+
+export function embedItemCodeInDescription(description: string, itemCode: string): string {
+  const cleanDesc = stripItemCodeTag(description);
+  const code = normalizeItemCode(itemCode);
+  if (!code) return cleanDesc;
+  return cleanDesc ? `${cleanDesc}\n[Cód: ${code}]` : `[Cód: ${code}]`;
+}
+
+export function isMissingItemCodeColumnError(
+  error: { message?: string | null; code?: string | null } | null | undefined
+): boolean {
+  if (!error) return false;
+  const msg = (error.message ?? '').toLowerCase();
+  return (
+    msg.includes('item_code') &&
+    (error.code === '42703' ||
+      error.code === 'PGRST204' ||
+      msg.includes('does not exist') ||
+      msg.includes('schema cache') ||
+      msg.includes('could not find'))
+  );
+}
+
 export function isMissingSiteProductsTableError(
   error: { message?: string | null; code?: string | null } | null | undefined
 ): boolean {
@@ -169,7 +228,7 @@ export function filterSiteProducts(
   filters: {
     search?: string;
     category?: SiteCategoryId | 'all';
-    status?: 'all' | 'active' | 'hidden' | 'featured' | 'priced';
+    status?: 'all' | 'active' | 'hidden' | 'featured' | 'priced' | 'coded' | 'no_code';
   }
 ): SiteProductRow[] {
   const q = (filters.search ?? '')
@@ -186,9 +245,11 @@ export function filterSiteProducts(
     if (filters.status === 'hidden' && item.active) return false;
     if (filters.status === 'featured' && !item.featured) return false;
     if (filters.status === 'priced' && (item.price === null || item.price <= 0)) return false;
+    if (filters.status === 'coded' && !normalizeItemCode(item.item_code)) return false;
+    if (filters.status === 'no_code' && Boolean(normalizeItemCode(item.item_code))) return false;
 
     if (q) {
-      const hay = `${item.title} ${item.slug} ${item.brand} ${item.specs} ${item.category_label} ${item.description}`
+      const hay = `${item.item_code} ${item.title} ${item.slug} ${item.brand} ${item.specs} ${item.category_label} ${item.description}`
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase();
@@ -210,6 +271,7 @@ function escapeCsv(v: unknown): string {
 export function buildSiteCatalogCsv(items: SiteProductRow[]): string {
   const BOM = '\uFEFF';
   const header = [
+    'Código',
     'Slug',
     'Título',
     'Categoria',
@@ -223,6 +285,7 @@ export function buildSiteCatalogCsv(items: SiteProductRow[]): string {
   ];
   const rows = items.map(item =>
     [
+      escapeCsv(item.item_code),
       escapeCsv(item.slug),
       escapeCsv(item.title),
       escapeCsv(item.category_label),

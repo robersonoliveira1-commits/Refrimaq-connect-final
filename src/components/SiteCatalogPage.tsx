@@ -30,16 +30,22 @@ import SiteBannersTab from './SiteBannersTab';
 import { getBannerScheduleStatus, getLocalTodayIso } from '../lib/siteBannersEngine';
 import {
   SITE_CATEGORIES,
+  SITE_PRODUCTS_ADD_ITEM_CODE_SQL,
   SITE_PRODUCTS_SETUP_SQL,
   SiteCategoryId,
   SiteProductRow,
   buildSiteCatalogCsv,
+  embedItemCodeInDescription,
   filterSiteProducts,
   formatSitePrice,
   getSiteCategoryLabel,
+  isMissingItemCodeColumnError,
   isMissingSiteProductsTableError,
+  normalizeItemCode,
   parseSitePriceInput,
+  resolveSiteProductItemCode,
   slugifySiteProduct,
+  stripItemCodeTag,
   suggestSiteSpecs,
 } from '../lib/siteCatalogEngine';
 import { SITE_CATALOG_SEED } from '../data/siteCatalogSeed';
@@ -53,6 +59,7 @@ interface SiteCatalogPageProps {
 
 interface ProductFormState {
   id: string;
+  item_code: string;
   title: string;
   slug: string;
   slugTouched: boolean;
@@ -69,6 +76,7 @@ interface ProductFormState {
 
 const BLANK_FORM: ProductFormState = {
   id: '',
+  item_code: '',
   title: '',
   slug: '',
   slugTouched: false,
@@ -96,6 +104,8 @@ export default function SiteCatalogPage({
   const [items, setItems] = useState<SiteProductRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [missingTable, setMissingTable] = useState(false);
+  const [missingItemCodeCol, setMissingItemCodeCol] = useState(false);
+  const [copiedCodeSql, setCopiedCodeSql] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [copiedSql, setCopiedSql] = useState(false);
 
@@ -106,7 +116,7 @@ export default function SiteCatalogPage({
   // Filters & pagination
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<SiteCategoryId | 'all'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'hidden' | 'featured' | 'priced'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'hidden' | 'featured' | 'priced' | 'coded' | 'no_code'>('all');
   const [page, setPage] = useState(1);
 
   // Modal state
@@ -181,24 +191,31 @@ export default function SiteCatalogPage({
       }
 
       if (data && data.length > 0) {
+        if (from === 0) {
+          setMissingItemCodeCol(!('item_code' in (data[0] as Record<string, unknown>)));
+        }
         all.push(
-          ...(data as Array<Record<string, unknown>>).map(r => ({
-            id: String(r.id),
-            slug: String(r.slug ?? ''),
-            title: String(r.title ?? ''),
-            category_id: (r.category_id as SiteCategoryId) ?? 'acessorios',
-            category_label: String(r.category_label ?? getSiteCategoryLabel(String(r.category_id ?? ''))),
-            brand: String(r.brand ?? 'Memo'),
-            price: r.price !== null && r.price !== undefined ? Number(r.price) : null,
-            specs: String(r.specs ?? ''),
-            description: String(r.description ?? ''),
-            image_url: String(r.image_url ?? ''),
-            featured: Boolean(r.featured),
-            active: r.active !== false,
-            sort_order: Number(r.sort_order ?? 0),
-            created_at: r.created_at ? String(r.created_at) : undefined,
-            updated_at: r.updated_at ? String(r.updated_at) : undefined,
-          }))
+          ...(data as Array<Record<string, unknown>>).map(r => {
+            const rawDesc = String(r.description ?? '');
+            return {
+              id: String(r.id),
+              slug: String(r.slug ?? ''),
+              item_code: resolveSiteProductItemCode(r.item_code, rawDesc),
+              title: String(r.title ?? ''),
+              category_id: (r.category_id as SiteCategoryId) ?? 'acessorios',
+              category_label: String(r.category_label ?? getSiteCategoryLabel(String(r.category_id ?? ''))),
+              brand: String(r.brand ?? 'Memo'),
+              price: r.price !== null && r.price !== undefined ? Number(r.price) : null,
+              specs: String(r.specs ?? ''),
+              description: stripItemCodeTag(rawDesc),
+              image_url: String(r.image_url ?? ''),
+              featured: Boolean(r.featured),
+              active: r.active !== false,
+              sort_order: Number(r.sort_order ?? 0),
+              created_at: r.created_at ? String(r.created_at) : undefined,
+              updated_at: r.updated_at ? String(r.updated_at) : undefined,
+            };
+          })
         );
         from += PAGE_SIZE;
         if (data.length < PAGE_SIZE) hasMore = false;
@@ -209,6 +226,16 @@ export default function SiteCatalogPage({
 
     setItems(all);
     setLoading(false);
+  }
+
+  async function handleCopyItemCodeSql() {
+    try {
+      await navigator.clipboard.writeText(SITE_PRODUCTS_ADD_ITEM_CODE_SQL);
+      setCopiedCodeSql(true);
+      setTimeout(() => setCopiedCodeSql(false), 2500);
+    } catch {
+      setErrorMsg('Não foi possível copiar automaticamente o SQL da coluna item_code.');
+    }
   }
 
   async function handleCopySql() {
@@ -262,6 +289,7 @@ export default function SiteCatalogPage({
   function openEditModal(item: SiteProductRow) {
     setForm({
       id: item.id,
+      item_code: item.item_code || '',
       title: item.title,
       slug: item.slug,
       slugTouched: true,
@@ -335,15 +363,18 @@ export default function SiteCatalogPage({
     setSaving(true);
     setModalError('');
 
-    const payload = {
+    const normalizedCode = normalizeItemCode(form.item_code);
+    const cleanDescription = stripItemCodeTag(form.description);
+
+    const basePayload = {
       title,
       slug: finalSlug,
       category_id: form.category_id,
       category_label: getSiteCategoryLabel(form.category_id),
       brand: form.brand.trim() || 'Memo',
       price: parsedPrice,
-      specs: form.specs.trim() || suggestSiteSpecs(title, form.description),
-      description: form.description.trim(),
+      specs: form.specs.trim() || suggestSiteSpecs(title, cleanDescription),
+      description: cleanDescription,
       image_url: form.image_url.trim(),
       featured: form.featured,
       active: form.active,
@@ -351,9 +382,27 @@ export default function SiteCatalogPage({
       updated_at: new Date().toISOString(),
     };
 
-    const res = form.id
-      ? await supabase.from('site_products').update(payload).eq('id', form.id)
-      : await supabase.from('site_products').insert(payload);
+    const payloadWithCode = {
+      ...basePayload,
+      item_code: normalizedCode,
+    };
+
+    let res = form.id
+      ? await supabase.from('site_products').update(payloadWithCode).eq('id', form.id)
+      : await supabase.from('site_products').insert(payloadWithCode);
+
+    // Schema-safe fallback: if column item_code hasn't been added via SQL yet,
+    // persist the code inside description tag [Cód: ...] so nothing is lost.
+    if (res.error && isMissingItemCodeColumnError(res.error)) {
+      setMissingItemCodeCol(true);
+      const fallbackPayload = {
+        ...basePayload,
+        description: embedItemCodeInDescription(cleanDescription, normalizedCode),
+      };
+      res = form.id
+        ? await supabase.from('site_products').update(fallbackPayload).eq('id', form.id)
+        : await supabase.from('site_products').insert(fallbackPayload);
+    }
 
     setSaving(false);
     if (res.error) {
@@ -560,6 +609,22 @@ export default function SiteCatalogPage({
           </div>
         )}
 
+        {!missingTable && missingItemCodeCol && items.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl px-4 py-3 text-xs flex flex-wrap items-center justify-between gap-3">
+            <span>
+              <strong>Modo compatibilidade ativo para Código do Item:</strong> os códigos já estão sendo salvos normalmente, mas você pode adicionar a coluna dedicada <code className="font-mono bg-amber-100 px-1 rounded">item_code</code> no Supabase SQL Editor.
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyItemCodeSql}
+              className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0"
+            >
+              {copiedCodeSql ? <Check size={13} /> : <Copy size={13} />}
+              {copiedCodeSql ? 'SQL Copiado!' : 'Copiar SQL (item_code)'}
+            </button>
+          </div>
+        )}
+
         {/* Guided setup when site_products table has not been created in Supabase yet */}
         {missingTable ? (
           <div className="bg-white border border-amber-200 rounded-2xl p-6 max-w-3xl mx-auto space-y-4 shadow-sm">
@@ -671,7 +736,7 @@ export default function SiteCatalogPage({
                     type="text"
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="Buscar por nome, marca, especificação ou categoria..."
+                    placeholder="Buscar por código, nome, marca, especificação ou categoria..."
                     className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                   {search && (
@@ -705,6 +770,8 @@ export default function SiteCatalogPage({
                   <option value="hidden">Somente ocultos</option>
                   <option value="featured">Destaques na Home</option>
                   <option value="priced">Com preço definido</option>
+                  <option value="coded">Com código do item</option>
+                  <option value="no_code">Sem código do item</option>
                 </select>
 
                 {hasFilters && (
@@ -762,6 +829,11 @@ export default function SiteCatalogPage({
                         {/* Info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
+                            {item.item_code && (
+                              <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                                Cód. {item.item_code}
+                              </span>
+                            )}
                             <p className="font-semibold text-slate-800 text-sm truncate">{item.title}</p>
                             {item.specs && (
                               <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-100 text-slate-600">
@@ -905,16 +977,16 @@ export default function SiteCatalogPage({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Categoria *</label>
-                  <select
-                    value={form.category_id}
-                    onChange={e => setForm(prev => ({ ...prev, category_id: e.target.value as SiteCategoryId }))}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  >
-                    {SITE_CATEGORIES.map(c => (
-                      <option key={c.id} value={c.id}>{c.label}</option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Código do Item <span className="font-normal text-slate-400">— p/ orçamentos (SKU / Ref.)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={form.item_code}
+                    onChange={e => setForm(prev => ({ ...prev, item_code: e.target.value }))}
+                    placeholder="Ex: MEMO-360, 10452..."
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
                 </div>
 
                 <div>
@@ -926,6 +998,19 @@ export default function SiteCatalogPage({
                     placeholder="Memo, Kegsbrasil, Celli..."
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Categoria *</label>
+                  <select
+                    value={form.category_id}
+                    onChange={e => setForm(prev => ({ ...prev, category_id: e.target.value as SiteCategoryId }))}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  >
+                    {SITE_CATEGORIES.map(c => (
+                      <option key={c.id} value={c.id}>{c.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -964,17 +1049,6 @@ export default function SiteCatalogPage({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Slug (identificador único)</label>
-                  <input
-                    type="text"
-                    value={form.slug}
-                    onChange={e => setForm(prev => ({ ...prev, slug: e.target.value, slugTouched: true }))}
-                    placeholder="chopeira-eletrica-small-50l"
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  />
-                </div>
-
-                <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Ordem de exibição</label>
                   <input
                     type="number"
@@ -982,6 +1056,17 @@ export default function SiteCatalogPage({
                     value={form.sort_order}
                     onChange={e => setForm(prev => ({ ...prev, sort_order: e.target.value }))}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Slug (identificador único)</label>
+                  <input
+                    type="text"
+                    value={form.slug}
+                    onChange={e => setForm(prev => ({ ...prev, slug: e.target.value, slugTouched: true }))}
+                    placeholder="chopeira-eletrica-small-50l"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                 </div>
               </div>

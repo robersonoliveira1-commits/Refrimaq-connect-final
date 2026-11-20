@@ -5,6 +5,12 @@ import {
   formatSitePrice,
   suggestSiteSpecs,
   isMissingSiteProductsTableError,
+  isMissingItemCodeColumnError,
+  normalizeItemCode,
+  extractItemCodeTag,
+  stripItemCodeTag,
+  resolveSiteProductItemCode,
+  embedItemCodeInDescription,
   filterSiteProducts,
   buildSiteCatalogCsv,
   SiteProductRow,
@@ -52,11 +58,34 @@ test('isMissingSiteProductsTableError detects PostgREST and Postgres missing-tab
   assert.equal(isMissingSiteProductsTableError({ message: 'permission denied', code: '42501' }), false);
 });
 
-test('filterSiteProducts and buildSiteCatalogCsv work cleanly', () => {
+test('item_code helpers normalize, detect schema error, and round-trip fallback tag cleanly', () => {
+  assert.equal(normalizeItemCode('  MEMO-360  '), 'MEMO-360');
+  const embedded = embedItemCodeInDescription('Caixa térmica 360L.', 'MEMO-360');
+  assert.ok(embedded.includes('[Cód: MEMO-360]'));
+  assert.equal(extractItemCodeTag(embedded), 'MEMO-360');
+  assert.equal(stripItemCodeTag(embedded), 'Caixa térmica 360L.');
+  assert.equal(resolveSiteProductItemCode('', embedded), 'MEMO-360');
+  assert.equal(resolveSiteProductItemCode('SKU-999', embedded), 'SKU-999');
+
+  assert.equal(
+    isMissingItemCodeColumnError({
+      message: "Could not find the 'item_code' column of 'site_products' in the schema cache",
+      code: 'PGRST204',
+    }),
+    true
+  );
+  assert.equal(
+    isMissingItemCodeColumnError({ message: 'duplicate key value violates unique constraint', code: '23505' }),
+    false
+  );
+});
+
+test('filterSiteProducts and buildSiteCatalogCsv work cleanly with item_code', () => {
   const sample: SiteProductRow[] = [
     {
       id: '1',
       slug: 'chopeira-small-50',
+      item_code: 'MEMO-50-2T',
       title: 'Chopeira Elétrica Small 50L/h',
       category_id: 'chopeiras-eletricas',
       category_label: 'Chopeiras Elétricas',
@@ -72,6 +101,7 @@ test('filterSiteProducts and buildSiteCatalogCsv work cleanly', () => {
     {
       id: '2',
       slug: 'barril-30l',
+      item_code: '',
       title: 'Barril 30L Slim',
       category_id: 'barris',
       category_label: 'Barris Kegsbrasil',
@@ -87,12 +117,16 @@ test('filterSiteProducts and buildSiteCatalogCsv work cleanly', () => {
   ];
 
   assert.equal(filterSiteProducts(sample, { search: 'eletrica' }).length, 1);
+  assert.equal(filterSiteProducts(sample, { search: 'MEMO-50-2T' }).length, 1);
   assert.equal(filterSiteProducts(sample, { status: 'hidden' }).length, 1);
   assert.equal(filterSiteProducts(sample, { status: 'featured' }).length, 1);
   assert.equal(filterSiteProducts(sample, { status: 'priced' }).length, 1);
+  assert.equal(filterSiteProducts(sample, { status: 'coded' }).length, 1);
+  assert.equal(filterSiteProducts(sample, { status: 'no_code' }).length, 1);
 
   const csv = buildSiteCatalogCsv(sample);
-  assert.ok(csv.startsWith('\uFEFFSlug;Título;Categoria;'));
+  assert.ok(csv.startsWith('\uFEFFCódigo;Slug;Título;Categoria;'));
+  assert.ok(csv.includes('MEMO-50-2T;chopeira-small-50;'));
   assert.ok(csv.includes('4490,00'));
   assert.ok(csv.includes('Sob consulta'));
 });

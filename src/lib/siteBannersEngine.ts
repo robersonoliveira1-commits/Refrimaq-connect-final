@@ -223,7 +223,7 @@ export const BANNER_QUICK_TEMPLATES: {
       headline: '',
       subtitle: '',
       announcement_bar: '',
-      cta_label: 'Ver campanha',
+      cta_label: '',
       secondary_cta_label: '',
       action_type: 'catalog',
       action_value: '',

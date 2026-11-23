@@ -77,9 +77,9 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
   const [saving, setSaving] = useState(false);
   const [uploadingTarget, setUploadingTarget] = useState<'desktop' | 'mobile' | null>(null);
   const [modalError, setModalError] = useState('');
-  const [fitMode, setFitMode] = useState<ImageFitMode>('auto');
+  const [fitMode, setFitMode] = useState<ImageFitMode>('preserve');
   const [focalY, setFocalY] = useState<ImageFocalY>('center');
-  const [autoGenerateMobile, setAutoGenerateMobile] = useState(true);
+  const [autoGenerateMobile, setAutoGenerateMobile] = useState(false);
   const [autoFitNotice, setAutoFitNotice] = useState('');
   const [previewNeedsAmbient, setPreviewNeedsAmbient] = useState(false);
 
@@ -745,71 +745,83 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                   )}
 
                   {form.mode === 'artwork' ? (
-                    <div
-                      className="relative flex items-center justify-center overflow-hidden"
-                      style={{
-                        backgroundColor: previewTheme.sectionBg,
-                        aspectRatio: previewMode === 'mobile' ? '15 / 16' : '1920 / 580',
-                      }}
-                    >
-                      {(previewMode === 'mobile' && form.mobile_image_url) ||
-                      form.desktop_image_url ? (
-                        (() => {
-                          const previewSrc = resolveSiteMediaUrl(
-                            previewMode === 'mobile' && form.mobile_image_url
-                              ? form.mobile_image_url
-                              : form.desktop_image_url
-                          );
-                          return (
-                            <>
-                              {previewNeedsAmbient && (
-                                <img
-                                  src={previewSrc}
-                                  alt=""
-                                  aria-hidden="true"
-                                  className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl brightness-[0.42] saturate-125 pointer-events-none"
-                                />
-                              )}
-                              <img
-                                src={previewSrc}
-                                alt="Preview arte"
-                                onLoad={e => {
-                                  const img = e.currentTarget;
-                                  if (img.naturalWidth && img.naturalHeight) {
-                                    const srcR = img.naturalWidth / img.naturalHeight;
-                                    const slotR =
-                                      previewMode === 'mobile' ? 750 / 820 : 1920 / 580;
-                                    const diff = Math.max(srcR / slotR, slotR / srcR);
-                                    setPreviewNeedsAmbient(diff > AUTO_COVER_MAX_RATIO_DIFF);
-                                  }
-                                }}
-                                className={
-                                  previewNeedsAmbient
-                                    ? 'relative z-10 w-full h-full object-contain drop-shadow-[0_8px_24px_rgba(0,0,0,0.45)]'
-                                    : 'w-full h-full object-cover'
-                                }
-                              />
-                            </>
-                          );
-                        })()
-                      ) : (
-                        <div className="text-center text-slate-400 p-6 space-y-1">
-                          <ImageIcon size={28} className="mx-auto opacity-60" />
-                          <p className="text-xs">
-                            Envie a arte {previewMode === 'mobile' ? 'Mobile (750×820)' : 'Desktop Tela Cheia (1920×580)'} abaixo
-                          </p>
-                        </div>
-                      )}
-                      {form.cta_label.trim() && (
-                        <span
-                          className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-white inline-flex items-center gap-1 shadow-md"
-                          style={{ backgroundColor: previewTheme.accentBg }}
+                    (() => {
+                      const hasDedicatedMobile = Boolean(form.mobile_image_url.trim());
+                      const useNaturalMobilePreview = previewMode === 'mobile' && !hasDedicatedMobile;
+                      return (
+                        <div
+                          className="relative flex items-center justify-center overflow-hidden"
+                          style={{
+                            backgroundColor: previewTheme.sectionBg,
+                            aspectRatio: useNaturalMobilePreview
+                              ? undefined
+                              : previewMode === 'mobile'
+                              ? '15 / 16'
+                              : '1440 / 560',
+                          }}
                         >
-                          {form.cta_label}
-                          <ArrowRight size={12} />
-                        </span>
-                      )}
-                    </div>
+                          {(previewMode === 'mobile' && form.mobile_image_url) ||
+                          form.desktop_image_url ? (
+                            (() => {
+                              const previewSrc = resolveSiteMediaUrl(
+                                previewMode === 'mobile' && form.mobile_image_url
+                                  ? form.mobile_image_url
+                                  : form.desktop_image_url
+                              );
+                              return (
+                                <>
+                                  {!useNaturalMobilePreview && previewNeedsAmbient && (
+                                    <img
+                                      src={previewSrc}
+                                      alt=""
+                                      aria-hidden="true"
+                                      className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl brightness-[0.48] saturate-125 pointer-events-none"
+                                    />
+                                  )}
+                                  <img
+                                    src={previewSrc}
+                                    alt="Preview arte"
+                                    onLoad={e => {
+                                      const img = e.currentTarget;
+                                      if (img.naturalWidth && img.naturalHeight) {
+                                        const srcR = img.naturalWidth / img.naturalHeight;
+                                        const slotR =
+                                          previewMode === 'mobile' ? 750 / 820 : 1440 / 560;
+                                        const diff = Math.max(srcR / slotR, slotR / srcR);
+                                        setPreviewNeedsAmbient(diff > AUTO_COVER_MAX_RATIO_DIFF);
+                                      }
+                                    }}
+                                    className={
+                                      useNaturalMobilePreview
+                                        ? 'relative z-10 block w-full h-auto'
+                                        : previewNeedsAmbient
+                                        ? 'relative z-10 w-full h-full object-contain drop-shadow-[0_8px_24px_rgba(0,0,0,0.45)]'
+                                        : 'w-full h-full object-cover'
+                                    }
+                                  />
+                                </>
+                              );
+                            })()
+                          ) : (
+                            <div className="text-center text-slate-400 p-6 space-y-1">
+                              <ImageIcon size={28} className="mx-auto opacity-60" />
+                              <p className="text-xs">
+                                Envie a arte {previewMode === 'mobile' ? 'Mobile (opcional)' : 'Desktop (ex.: 1776×896 ou 1920×580)'} abaixo
+                              </p>
+                            </div>
+                          )}
+                          {form.cta_label.trim() && (
+                            <span
+                              className="absolute z-20 bottom-3 right-3 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-white inline-flex items-center gap-1 shadow-md"
+                              style={{ backgroundColor: previewTheme.accentBg }}
+                            >
+                              {form.cta_label}
+                              <ArrowRight size={12} />
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()
                   ) : (
                     <div
                       className={`p-5 text-white grid gap-4 items-center ${
@@ -1041,9 +1053,9 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                   <div className="flex flex-wrap items-center gap-1.5">
                     {(
                       [
-                        { id: 'auto', label: 'Automático (sem cortar)' },
-                        { id: 'contain_blur', label: 'Inteira + fundo ambiente' },
-                        { id: 'cover', label: 'Preencher tudo' },
+                        { id: 'preserve', label: 'Original inteira (sem cortar)' },
+                        { id: 'contain_blur', label: 'Faixa 1920×580 + fundo ambiente' },
+                        { id: 'cover', label: 'Recortar 1920×580' },
                       ] as const
                     ).map(opt => (
                       <button
@@ -1096,7 +1108,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                       onChange={e => setAutoGenerateMobile(e.target.checked)}
                       className="w-3.5 h-3.5 accent-amber-500 rounded"
                     />
-                    Gerar e ajustar automaticamente a versão <strong>Mobile (750×820)</strong> ao subir a arte Desktop
+                    Gerar também cópia <strong>Mobile (750×820)</strong> automaticamente (deixe desmarcado para o celular exibir a arte Desktop inteira sem cortar)
                   </label>
                 )}
 
@@ -1112,7 +1124,7 @@ export default function SiteBannersTab({ onLiveCountChange }: SiteBannersTabProp
                     <div className="flex items-center justify-between gap-2">
                       <label className="block text-xs font-semibold text-slate-700">
                         {form.mode === 'artwork'
-                          ? 'Arte Principal Desktop * (1920×580 tela cheia auto)'
+                          ? 'Arte Principal Desktop * (proporção preservada, até 1920px)'
                           : 'Imagem/Arte Lateral Opcional (960×720 auto)'}
                       </label>
                       {form.desktop_image_url.trim() && (

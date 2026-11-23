@@ -4,11 +4,15 @@ export type ImageFitPresetKey =
   | 'banner_editorial'
   | 'product';
 
-export type ImageFitMode = 'auto' | 'contain_blur' | 'cover';
+export type ImageFitMode = 'preserve' | 'auto' | 'contain_blur' | 'cover';
 
 export type ImageFocalY = 'top' | 'center' | 'bottom';
 
-export type ResolvedFitStrategy = 'cover' | 'blur_backdrop_contain' | 'contain_white';
+export type ResolvedFitStrategy =
+  | 'preserve_original'
+  | 'cover'
+  | 'blur_backdrop_contain'
+  | 'contain_white';
 
 export interface ImageFitPreset {
   width: number;
@@ -48,7 +52,8 @@ export const IMAGE_FIT_PRESETS: Record<ImageFitPresetKey, ImageFitPreset> = {
  * Maximum ratio discrepancy allowed before Auto mode switches from full-bleed
  * cover crop to seamless blurred-backdrop contain (preserving 100% of text/artwork).
  */
-export const AUTO_COVER_MAX_RATIO_DIFF = 1.22;
+export const AUTO_COVER_MAX_RATIO_DIFF = 1.08;
+export const PRESERVE_MAX_WIDTH = 1920;
 
 export interface DrawRect {
   x: number;
@@ -123,6 +128,26 @@ export function computeAutoFitPlan(
   const safeSrcW = Math.max(1, Math.round(srcWidth));
   const safeSrcH = Math.max(1, Math.round(srcHeight));
   const preset = IMAGE_FIT_PRESETS[presetKey];
+
+  if (presetKey !== 'product' && mode === 'preserve') {
+    const scale = safeSrcW > PRESERVE_MAX_WIDTH ? PRESERVE_MAX_WIDTH / safeSrcW : 1;
+    const targetWidth = Math.max(1, Math.round(safeSrcW * scale));
+    const targetHeight = Math.max(1, Math.round(safeSrcH * scale));
+    const fullRect: DrawRect = { x: 0, y: 0, width: targetWidth, height: targetHeight };
+    return {
+      presetKey,
+      targetWidth,
+      targetHeight,
+      srcWidth: safeSrcW,
+      srcHeight: safeSrcH,
+      ratioDiff: 1,
+      strategy: 'preserve_original',
+      bgRect: fullRect,
+      fgRect: fullRect,
+      summaryLabel: `${safeSrcW}×${safeSrcH} → ${targetWidth}×${targetHeight} (arte original inteira sem cortar)`,
+    };
+  }
+
   const targetWidth = preset.width;
   const targetHeight = preset.height;
 
@@ -242,7 +267,9 @@ export async function processImageForSlot(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  if (plan.strategy === 'contain_white') {
+  if (plan.strategy === 'preserve_original') {
+    ctx.drawImage(img, 0, 0, plan.targetWidth, plan.targetHeight);
+  } else if (plan.strategy === 'contain_white') {
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, plan.targetWidth, plan.targetHeight);
     ctx.drawImage(img, plan.fgRect.x, plan.fgRect.y, plan.fgRect.width, plan.fgRect.height);

@@ -97,72 +97,38 @@ $$;
 REVOKE ALL ON FUNCTION public.get_public_equipment_history(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_public_equipment_history(uuid) TO anon, authenticated;
 
--- 2. service_orders: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.service_orders ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "service_orders_select" ON public.service_orders;
-DROP POLICY IF EXISTS "service_orders_insert" ON public.service_orders;
-DROP POLICY IF EXISTS "service_orders_update" ON public.service_orders;
-DROP POLICY IF EXISTS "service_orders_delete" ON public.service_orders;
-DROP POLICY IF EXISTS "service_orders_auth_all" ON public.service_orders;
-CREATE POLICY "service_orders_auth_all" ON public.service_orders
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 3. service_order_parts: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.service_order_parts ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "service_order_parts_select" ON public.service_order_parts;
-DROP POLICY IF EXISTS "service_order_parts_insert" ON public.service_order_parts;
-DROP POLICY IF EXISTS "service_order_parts_update" ON public.service_order_parts;
-DROP POLICY IF EXISTS "service_order_parts_delete" ON public.service_order_parts;
-DROP POLICY IF EXISTS "service_order_parts_auth_all" ON public.service_order_parts;
-CREATE POLICY "service_order_parts_auth_all" ON public.service_order_parts
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 4. service_order_attachments: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.service_order_attachments ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "attachments_select" ON public.service_order_attachments;
-DROP POLICY IF EXISTS "attachments_insert" ON public.service_order_attachments;
-DROP POLICY IF EXISTS "attachments_update" ON public.service_order_attachments;
-DROP POLICY IF EXISTS "attachments_delete" ON public.service_order_attachments;
-DROP POLICY IF EXISTS "service_order_attachments_auth_all" ON public.service_order_attachments;
-CREATE POLICY "service_order_attachments_auth_all" ON public.service_order_attachments
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 5. customer_equipments: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.customer_equipments ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "equipments_select" ON public.customer_equipments;
-DROP POLICY IF EXISTS "equipments_insert" ON public.customer_equipments;
-DROP POLICY IF EXISTS "equipments_update" ON public.customer_equipments;
-DROP POLICY IF EXISTS "equipments_delete" ON public.customer_equipments;
-DROP POLICY IF EXISTS "customer_equipments_auth_all" ON public.customer_equipments;
-CREATE POLICY "customer_equipments_auth_all" ON public.customer_equipments
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 6. stock_movements: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.stock_movements ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "movements_select" ON public.stock_movements;
-DROP POLICY IF EXISTS "movements_insert" ON public.stock_movements;
-DROP POLICY IF EXISTS "movements_update" ON public.stock_movements;
-DROP POLICY IF EXISTS "movements_delete" ON public.stock_movements;
-DROP POLICY IF EXISTS "stock_movements_auth_all" ON public.stock_movements;
-CREATE POLICY "stock_movements_auth_all" ON public.stock_movements
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 7. services: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "services_select" ON public.services;
-DROP POLICY IF EXISTS "services_insert" ON public.services;
-DROP POLICY IF EXISTS "services_update" ON public.services;
-DROP POLICY IF EXISTS "services_delete" ON public.services;
-DROP POLICY IF EXISTS "services_auth_all" ON public.services;
-CREATE POLICY "services_auth_all" ON public.services
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 8. used_items: bloquear `anon`, liberar apenas `authenticated`
-ALTER TABLE public.used_items ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "select_used_items" ON public.used_items;
-DROP POLICY IF EXISTS "used_items_auth_select" ON public.used_items;
-CREATE POLICY "used_items_auth_select" ON public.used_items
-  FOR SELECT TO authenticated USING (true);
+-- 2-8. Varredura dinâmica: remove TODA e qualquer política legada (inclusive criadas pela UI)
+-- das 7 tabelas internas do CRM e recria política estritamente para `authenticated`.
+DO $$
+DECLARE
+  tbl text;
+  pol record;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY[
+    'service_orders',
+    'service_order_parts',
+    'service_order_attachments',
+    'customer_equipments',
+    'stock_movements',
+    'services',
+    'used_items'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl);
+    FOR pol IN
+      SELECT policyname
+      FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = tbl
+    LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', pol.policyname, tbl);
+    END LOOP;
+    EXECUTE format(
+      'CREATE POLICY %I ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)',
+      tbl || '_auth_all',
+      tbl
+    );
+  END LOOP;
+END $$;
 
 -- 9. Storage: bloquear leitura anônima de comprovantes financeiros (expenses-attachments)
 DROP POLICY IF EXISTS "allow_public_read_expenses_attachments" ON storage.objects;

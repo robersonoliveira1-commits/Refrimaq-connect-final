@@ -7,36 +7,72 @@ interface Props {
   equipmentId: string;
 }
 
+interface PublicEquipmentRecord {
+  id: string;
+  equip_type?: string | null;
+  equip_brand?: string | null;
+  equip_model?: string | null;
+  equip_serial?: string | null;
+  equip_voltage?: string | null;
+  equip_gas?: string | null;
+  customers?: {
+    name?: string | null;
+    city?: string | null;
+  } | null;
+}
+
+interface PublicEquipmentOrder {
+  id: string;
+  order_number?: number | null;
+  visit_type?: string | null;
+  status?: string | null;
+  diagnosis?: string | null;
+  created_at: string;
+}
+
+function escapeHtml(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export default function PublicEquipmentView({ equipmentId }: Props) {
   const [loading, setLoading] = useState(true);
-  const [equipment, setEquipment] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
+  const [equipment, setEquipment] = useState<PublicEquipmentRecord | null>(null);
+  const [history, setHistory] = useState<PublicEquipmentOrder[]>([]);
   const [exportingPDF, setExportingPDF] = useState(false);
 
   function exportPDF() {
+    if (!equipment) return;
     setExportingPDF(true);
     const eq = equipment;
     const historyList = history;
 
-    const logoHtml = `<img src="${window.location.origin}/Refrimaq_Logomarca_-_modelo03.JPG" alt="Logo" style="height:56px;object-fit:contain;max-width:150px;" />`;
+    const logoHtml = `<img src="${escapeHtml(window.location.origin)}/Refrimaq_Logomarca_-_modelo03.JPG" alt="Logo" style="height:56px;object-fit:contain;max-width:150px;" />`;
 
     const rowsHtml = historyList.length > 0
       ? historyList.map(os => `
           <tr>
-            <td>#${String(os.order_number ?? 0).padStart(4, '0')}</td>
-            <td>${new Date(os.created_at).toLocaleDateString('pt-BR')}</td>
-            <td>${os.visit_type || '—'}</td>
-            <td>${os.status || '—'}</td>
-            <td>${os.diagnosis || 'Sem laudo cadastrado'}</td>
+            <td>#${escapeHtml(String(os.order_number ?? 0).padStart(4, '0'))}</td>
+            <td>${escapeHtml(new Date(os.created_at).toLocaleDateString('pt-BR'))}</td>
+            <td>${escapeHtml(os.visit_type || '—')}</td>
+            <td>${escapeHtml(os.status || '—')}</td>
+            <td>${escapeHtml(os.diagnosis || 'Sem laudo cadastrado')}</td>
           </tr>
         `).join('')
       : '<tr><td colspan="5" style="text-align:center;color:#94a3b8">Nenhuma ordem de serviço registrada</td></tr>';
+
+    const safeIdShort = escapeHtml(eq.id.substring(0, 8).toUpperCase());
+    const safeSerial = escapeHtml(eq.equip_serial || 'S-N');
 
     const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8"/>
-  <title>Ficha_Equipamento_${eq.equip_serial || 'S-N'}</title>
+  <title>Ficha_Equipamento_${safeSerial}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #1e293b; padding: 24px; }
@@ -65,8 +101,8 @@ export default function PublicEquipmentView({ equipmentId }: Props) {
       </div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:16px;font-weight:800;color:#f59e0b">CPF: ${eq.id.substring(0, 8).toUpperCase()}</div>
-      <div style="font-size:10px;color:#64748b;margin-top:2px">Emissão: ${new Date().toLocaleDateString('pt-BR')}</div>
+      <div style="font-size:16px;font-weight:800;color:#f59e0b">CPF: ${safeIdShort}</div>
+      <div style="font-size:10px;color:#64748b;margin-top:2px">Emissão: ${escapeHtml(new Date().toLocaleDateString('pt-BR'))}</div>
     </div>
   </div>
 
@@ -74,10 +110,10 @@ export default function PublicEquipmentView({ equipmentId }: Props) {
     <div class="sec-t">Dados do Equipamento</div>
     <div class="card">
       <div class="grid">
-        <div class="item"><label>Equipamento / Marca / Modelo</label><span>${eq.equip_type || '—'} · ${eq.equip_brand || '—'} ${eq.equip_model || '—'}</span></div>
-        <div class="item"><label>Nº de Série</label><span>${eq.equip_serial || '—'}</span></div>
-        <div class="item"><label>Voltagem / Gás</label><span>${eq.equip_voltage || '—'} / ${eq.equip_gas || '—'}</span></div>
-        <div class="item"><label>Cliente / Cidade</label><span>${eq.customers?.name || '—'} · ${eq.customers?.city || '—'}</span></div>
+        <div class="item"><label>Equipamento / Marca / Modelo</label><span>${escapeHtml(eq.equip_type || '—')} · ${escapeHtml(eq.equip_brand || '—')} ${escapeHtml(eq.equip_model || '—')}</span></div>
+        <div class="item"><label>Nº de Série</label><span>${escapeHtml(eq.equip_serial || '—')}</span></div>
+        <div class="item"><label>Voltagem / Gás</label><span>${escapeHtml(eq.equip_voltage || '—')} / ${escapeHtml(eq.equip_gas || '—')}</span></div>
+        <div class="item"><label>Cliente / Cidade</label><span>${escapeHtml(eq.customers?.name || '—')} · ${escapeHtml(eq.customers?.city || '—')}</span></div>
       </div>
     </div>
   </div>
@@ -104,7 +140,7 @@ export default function PublicEquipmentView({ equipmentId }: Props) {
 
   <div class="foot">
     <span>Relatório gerado via QR Code Refrimaq Connect</span>
-    <span>Série: ${eq.equip_serial || 'S-N'} · CPF: ${eq.id.substring(0, 8).toUpperCase()}</span>
+    <span>Série: ${safeSerial} · CPF: ${safeIdShort}</span>
   </div>
 </body>
 </html>`;
@@ -114,36 +150,61 @@ export default function PublicEquipmentView({ equipmentId }: Props) {
   }
 
   useEffect(() => {
-    loadData();
-  }, [equipmentId]);
+    let mounted = true;
+    async function loadData() {
+      setLoading(true);
+      try {
+        // 1. Prefer scoped SECURITY DEFINER RPC (safe after removing broad anon table access)
+        const { data: rpcData, error: rpcError } = await supabase.rpc(
+          'get_public_equipment_history',
+          { p_equipment_id: equipmentId }
+        );
 
-  async function loadData() {
-    setLoading(true);
-    try {
-      // 1. Fetch equipment details (public select policy allows this)
-      const { data: eq } = await supabase
-        .from('customer_equipments')
-        .select('*, customers(name, city)')
-        .eq('id', equipmentId)
-        .maybeSingle();
+        if (!rpcError && rpcData && typeof rpcData === 'object') {
+          const payload = rpcData as {
+            equipment?: PublicEquipmentRecord | null;
+            history?: PublicEquipmentOrder[];
+          };
+          if (mounted) {
+            setEquipment(payload.equipment ?? null);
+            setHistory(Array.isArray(payload.history) ? payload.history : []);
+          }
+          return;
+        }
 
-      if (eq) {
-        setEquipment(eq);
-        
-        // 2. Fetch service orders linked to this equipment
-        const { data: orders } = await supabase
-          .from('service_orders')
-          .select('id, order_number, visit_type, status, diagnosis, created_at')
-          .eq('equipment_id', eq.id)
-          .order('created_at', { ascending: false });
+        // 2. Fallback only if migration creating RPC has not been applied yet
+        const missingRpc =
+          rpcError?.code === 'PGRST202' ||
+          rpcError?.code === '42883' ||
+          String(rpcError?.message ?? '').includes('get_public_equipment_history');
+        if (missingRpc) {
+          const { data: eq } = await supabase
+            .from('customer_equipments')
+            .select('*, customers(name, city)')
+            .eq('id', equipmentId)
+            .maybeSingle();
 
-        setHistory(orders ?? []);
+          if (eq && mounted) {
+            setEquipment(eq as PublicEquipmentRecord);
+            const { data: orders } = await supabase
+              .from('service_orders')
+              .select('id, order_number, visit_type, status, diagnosis, created_at')
+              .eq('equipment_id', eq.id)
+              .order('created_at', { ascending: false });
+            setHistory((orders as PublicEquipmentOrder[] | null) ?? []);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading public equipment data:', err);
+      } finally {
+        if (mounted) setLoading(false);
       }
-    } catch (err) {
-      console.error("Error loading public equipment data:", err);
     }
-    setLoading(false);
-  }
+    loadData();
+    return () => {
+      mounted = false;
+    };
+  }, [equipmentId]);
 
   if (loading) {
     return (

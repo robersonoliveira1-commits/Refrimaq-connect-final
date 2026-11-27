@@ -8,6 +8,7 @@ import {
   buildWorkshopReportWorkbook,
   calculateWorkshopOrderFinancials,
   computeWorkshopReportSummary,
+  getWorkshopOrderTechnicianName,
   matchesLocalDateRange,
   matchesWorkshopOrderSearch,
   parseMultiOsQuery,
@@ -71,6 +72,7 @@ export default function WorkshopReportTab() {
   // Filters & manual selection
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [technicianFilter, setTechnicianFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -87,6 +89,7 @@ export default function WorkshopReportTab() {
             status,
             visit_type,
             labor_cost,
+            technician_id,
             equip_type,
             equip_brand,
             equip_model,
@@ -95,6 +98,7 @@ export default function WorkshopReportTab() {
             diagnosis,
             created_at,
             customers (name),
+            user_profiles (full_name),
             service_order_parts (
               product_id,
               part_name,
@@ -133,16 +137,34 @@ export default function WorkshopReportTab() {
 
   const multiOsActive = useMemo(() => parseMultiOsQuery(search), [search]);
 
+  const uniqueTechnicians = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders) {
+      const name = getWorkshopOrderTechnicianName(o);
+      if (name) set.add(name);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [orders]);
+
+  const hasUnassignedTechnician = useMemo(
+    () => orders.some(o => !getWorkshopOrderTechnicianName(o)),
+    [orders]
+  );
+
   // Filtered orders (supports multi-OS list paste and local date comparison without UTC shift)
   const filtered = useMemo(
     () =>
       orders.filter(o => {
         const matchStatus = statusFilter === 'all' || o.status === statusFilter;
+        const techName = getWorkshopOrderTechnicianName(o);
+        const matchTech =
+          technicianFilter === 'all' ||
+          (technicianFilter === '__unassigned__' ? !techName : techName === technicianFilter);
         const matchDate = matchesLocalDateRange(o.created_at, startDate, endDate);
         const matchSearch = matchesWorkshopOrderSearch(o, search);
-        return matchStatus && matchDate && matchSearch;
+        return matchStatus && matchTech && matchDate && matchSearch;
       }),
-    [orders, statusFilter, startDate, endDate, search]
+    [orders, statusFilter, technicianFilter, startDate, endDate, search]
   );
 
   // Target orders for export: manually checked rows (within current filter) OR all filtered rows
@@ -205,7 +227,13 @@ export default function WorkshopReportTab() {
           <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Total de Ordens de Serviço</span>
           <span className="text-4xl font-extrabold text-slate-800 mt-2 z-10">{filtered.length}</span>
           <span className="text-xs text-slate-500 mt-1 z-10">
-            {statusFilter !== 'all' ? `Filtradas por status: ${statusFilter}` : 'Todas as OS ativas na lista'}
+            {statusFilter !== 'all' && technicianFilter !== 'all'
+              ? `Status: ${statusFilter} · Técnico: ${technicianFilter === '__unassigned__' ? 'Sem técnico' : technicianFilter}`
+              : statusFilter !== 'all'
+                ? `Filtradas por status: ${statusFilter}`
+                : technicianFilter !== 'all'
+                  ? `Filtradas por técnico: ${technicianFilter === '__unassigned__' ? 'Sem técnico atribuído' : technicianFilter}`
+                  : 'Todas as OS ativas na lista'}
           </span>
         </div>
 
@@ -250,13 +278,13 @@ export default function WorkshopReportTab() {
 
       {/* Filter panel */}
       <div className="bg-white border-b border-slate-200 p-4 sm:p-6 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3">
           {/* Text & Multi-OS Search */}
-          <div className="relative">
+          <div className="relative md:col-span-2 xl:col-span-3">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar cliente, modelo ou colar OSs (#0178 #0170)..."
+              placeholder="Buscar cliente, técnico, modelo ou colar OSs (#0178 #0170)..."
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400"
@@ -277,7 +305,8 @@ export default function WorkshopReportTab() {
           <select
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400"
+            aria-label="Filtrar por status"
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 xl:col-span-2"
           >
             <option value="all">Todos os Status</option>
             {ALL_STATUSES.map(s => (
@@ -285,8 +314,24 @@ export default function WorkshopReportTab() {
             ))}
           </select>
 
+          {/* Technician Filter */}
+          <select
+            value={technicianFilter}
+            onChange={e => setTechnicianFilter(e.target.value)}
+            aria-label="Filtrar por técnico responsável"
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 xl:col-span-3"
+          >
+            <option value="all">Todos os Técnicos</option>
+            {uniqueTechnicians.map(tech => (
+              <option key={tech} value={tech}>{tech}</option>
+            ))}
+            {hasUnassignedTechnician && (
+              <option value="__unassigned__">Sem técnico atribuído</option>
+            )}
+          </select>
+
           {/* Date range filters */}
-          <div className="flex gap-2 items-center md:col-span-2">
+          <div className="flex gap-2 items-center md:col-span-2 xl:col-span-4">
             <div className="relative flex-1">
               <Calendar size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
@@ -374,7 +419,7 @@ export default function WorkshopReportTab() {
             <p className="text-sm text-slate-400 mt-1">Tente ajustar a busca ou os limites de datas.</p>
           </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -390,6 +435,7 @@ export default function WorkshopReportTab() {
                   </th>
                   <th className="px-3 py-3.5">OS</th>
                   <th className="px-4 py-3.5">Cliente</th>
+                  <th className="px-4 py-3.5 whitespace-nowrap" title="Técnico Responsável">Técnico</th>
                   <th className="px-4 py-3.5">Tipo</th>
                   <th className="px-4 py-3.5">Modelo</th>
                   <th className="px-4 py-3.5">Nº Série</th>
@@ -403,6 +449,7 @@ export default function WorkshopReportTab() {
               <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
                 {filtered.map(o => {
                   const { partsTotal, servicesTotal, grandTotal } = getOrderTotals(o);
+                  const technicianName = getWorkshopOrderTechnicianName(o);
                   const isSelected = selectedIds.has(o.id);
                   return (
                     <tr
@@ -424,6 +471,14 @@ export default function WorkshopReportTab() {
                       </td>
                       <td className="px-4 py-4 font-medium text-slate-800">
                         {o.customers?.name || '—'}
+                      </td>
+                      <td
+                        className={`px-4 py-4 text-xs whitespace-nowrap ${
+                          technicianName ? 'font-medium text-slate-700' : 'text-slate-400'
+                        }`}
+                        title={technicianName || 'Técnico não atribuído'}
+                      >
+                        {technicianName || '—'}
                       </td>
                       <td className="px-4 py-4 text-xs">
                         <div className="font-medium text-slate-600">{o.visit_type}</div>
@@ -458,7 +513,7 @@ export default function WorkshopReportTab() {
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50/80 border-t-2 border-slate-200 font-bold text-slate-900">
-                  <td colSpan={8} className="px-4 py-4 text-right text-xs uppercase tracking-wider text-slate-500">
+                  <td colSpan={9} className="px-4 py-4 text-right text-xs uppercase tracking-wider text-slate-500">
                     {selectedIds.size > 0
                       ? `Totais das ${exportTargets.length} OS(s) Selecionadas:`
                       : 'Totais Gerais Filtrados:'}

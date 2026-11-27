@@ -26,6 +26,7 @@ export interface WorkshopReportOrder {
   status: string;
   visit_type: string;
   labor_cost: number | null;
+  technician_id?: string | null;
   equip_type: string | null;
   equip_brand?: string | null;
   equip_model: string | null;
@@ -34,7 +35,18 @@ export interface WorkshopReportOrder {
   diagnosis: string | null;
   created_at: string;
   customers: { name: string } | null;
+  user_profiles?: { full_name: string | null } | Array<{ full_name: string | null }> | null;
   service_order_parts: WorkshopReportPart[];
+}
+
+export function getWorkshopOrderTechnicianName(
+  order: Pick<WorkshopReportOrder, 'user_profiles'>
+): string {
+  const rel = order.user_profiles;
+  if (Array.isArray(rel)) {
+    return (rel[0]?.full_name ?? '').trim();
+  }
+  return (rel?.full_name ?? '').trim();
 }
 
 export interface ProductStockMeta {
@@ -175,8 +187,9 @@ export function matchesWorkshopOrderSearch(order: WorkshopReportOrder, search: s
     .map(p => p.part_name ?? '')
     .join(' ');
 
+  const technicianName = getWorkshopOrderTechnicianName(order);
   const hay = normalizeText(
-    `${order.customers?.name ?? ''} ${order.equip_brand ?? ''} ${order.equip_model ?? ''} ${
+    `${order.customers?.name ?? ''} ${technicianName} ${order.equip_brand ?? ''} ${order.equip_model ?? ''} ${
       order.equip_serial ?? ''
     } ${order.visit_type ?? ''} ${order.equip_type ?? ''} ${order.diagnosis ?? ''} ${partsNames}`
   );
@@ -463,7 +476,7 @@ function setNumFormat(ws: XLSX.WorkSheet, addr: string, numFmt: string) {
 
 /**
  * Builds the 3-sheet Excel workbook (.xlsx) for Oficina -> Relatório de OS:
- *  Sheet 1: "Relatório de OS" (preserves exact 12 existing columns + dynamic totals row)
+ *  Sheet 1: "Relatório de OS" (13 columns including Técnico Responsável + dynamic totals row)
  *  Sheet 2: "Consolidado de Materiais" (stock parts grouped with category, unit, qty, unit price, total, %, OSs, stock, deficit & voltage alerts)
  *  Sheet 3: "Consolidado de Serviços" (labor/services grouped and reconciled 100% with Sheet 1)
  */
@@ -474,11 +487,12 @@ export function buildWorkshopReportWorkbook(
   const wb = XLSX.utils.book_new();
 
   // =========================================================================
-  // SHEET 1: Relatório de OS (preserves exact existing 12 columns + totals)
+  // SHEET 1: Relatório de OS (13 columns including Técnico Responsável + totals)
   // =========================================================================
   const osHeaders = [
     'OS',
     'Cliente',
+    'Técnico Responsável',
     'Tipo Visita',
     'Tipo Equipamento',
     'Modelo',
@@ -499,6 +513,7 @@ export function buildWorkshopReportWorkbook(
   for (const o of orders) {
     const fin = calculateWorkshopOrderFinancials(o);
     const cleanDiag = (o.diagnosis || '').replace(/[\r\n\t]+/g, ' ').trim();
+    const technicianName = getWorkshopOrderTechnicianName(o) || 'Não atribuído';
     sumPartsSheet1 += fin.partsTotal;
     sumServicesSheet1 += fin.laborCost;
     sumGrandSheet1 += fin.grandTotal;
@@ -506,6 +521,7 @@ export function buildWorkshopReportWorkbook(
     osAoa.push([
       formatOsTag(o.order_number),
       o.customers?.name || '',
+      technicianName,
       o.visit_type || '',
       o.equip_type || '',
       o.equip_model || '',
@@ -513,7 +529,7 @@ export function buildWorkshopReportWorkbook(
       o.status || '',
       cleanDiag,
       // Keep 6-decimal numeric precision (formatted to 2 decimals via BRL_NUM_FMT)
-      // so Sheet 1 =SUM(I2:I{n}) matches Sheet 2 consolidated fractional totals to the exact cent.
+      // so Sheet 1 =SUM(J2:J{n}) matches Sheet 2 consolidated fractional totals to the exact cent.
       Math.round(fin.partsTotal * 1e6) / 1e6,
       Math.round(fin.laborCost * 1e6) / 1e6,
       Math.round(fin.grandTotal * 1e6) / 1e6,
@@ -531,6 +547,7 @@ export function buildWorkshopReportWorkbook(
     '',
     '',
     '',
+    '',
     'TOTAL GERAL DAS OSs EXPORTADAS',
     Math.round(sumPartsSheet1 * 1e6) / 1e6,
     Math.round(sumServicesSheet1 * 1e6) / 1e6,
@@ -540,20 +557,21 @@ export function buildWorkshopReportWorkbook(
 
   const wsOs = XLSX.utils.aoa_to_sheet(osAoa);
   for (let r = 2; r <= osLastDataRow; r++) {
-    setNumFormat(wsOs, `I${r}`, BRL_NUM_FMT);
     setNumFormat(wsOs, `J${r}`, BRL_NUM_FMT);
-    const rowVal = (osAoa[r - 1][10] as number) ?? 0;
-    setFormulaCell(wsOs, `K${r}`, `I${r}+J${r}`, BRL_NUM_FMT, rowVal);
+    setNumFormat(wsOs, `K${r}`, BRL_NUM_FMT);
+    const rowVal = (osAoa[r - 1][11] as number) ?? 0;
+    setFormulaCell(wsOs, `L${r}`, `J${r}+K${r}`, BRL_NUM_FMT, rowVal);
   }
   if (orders.length > 0) {
-    setFormulaCell(wsOs, `I${osTotalRow}`, `SUM(I2:I${osLastDataRow})`, BRL_NUM_FMT, Math.round(sumPartsSheet1 * 1e6) / 1e6);
-    setFormulaCell(wsOs, `J${osTotalRow}`, `SUM(J2:J${osLastDataRow})`, BRL_NUM_FMT, Math.round(sumServicesSheet1 * 1e6) / 1e6);
-    setFormulaCell(wsOs, `K${osTotalRow}`, `SUM(K2:K${osLastDataRow})`, BRL_NUM_FMT, Math.round(sumGrandSheet1 * 1e6) / 1e6);
-    wsOs['!autofilter'] = { ref: `A1:L${osLastDataRow}` };
+    setFormulaCell(wsOs, `J${osTotalRow}`, `SUM(J2:J${osLastDataRow})`, BRL_NUM_FMT, Math.round(sumPartsSheet1 * 1e6) / 1e6);
+    setFormulaCell(wsOs, `K${osTotalRow}`, `SUM(K2:K${osLastDataRow})`, BRL_NUM_FMT, Math.round(sumServicesSheet1 * 1e6) / 1e6);
+    setFormulaCell(wsOs, `L${osTotalRow}`, `SUM(L2:L${osLastDataRow})`, BRL_NUM_FMT, Math.round(sumGrandSheet1 * 1e6) / 1e6);
+    wsOs['!autofilter'] = { ref: `A1:M${osLastDataRow}` };
   }
   wsOs['!cols'] = [
     { wch: 10 }, // OS
     { wch: 28 }, // Cliente
+    { wch: 24 }, // Técnico Responsável
     { wch: 14 }, // Tipo Visita
     { wch: 18 }, // Tipo Equipamento
     { wch: 18 }, // Modelo

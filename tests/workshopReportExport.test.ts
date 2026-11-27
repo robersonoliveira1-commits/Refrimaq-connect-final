@@ -8,6 +8,7 @@ import {
   consolidateWorkshopMaterials,
   consolidateWorkshopServices,
   detectVoltageMismatchAlert,
+  getWorkshopOrderTechnicianName,
   matchesLocalDateRange,
   matchesWorkshopOrderSearch,
   parseMultiOsQuery,
@@ -47,6 +48,7 @@ const sampleOrders: WorkshopReportOrder[] = [
     diagnosis: 'COMPRESSOR QUEIMADO',
     created_at: '2026-11-13T14:00:00Z',
     customers: { name: 'Cliente A' },
+    user_profiles: { full_name: 'João Silva' },
     service_order_parts: [
       { product_id: 'p_comp', part_name: 'COMPRESSOR TECUMSEH AL4480 220V', quantity: 1, unit_price: 1300 },
       { product_id: 'p_gas', part_name: 'GAS REFRIGERANTE 134A', quantity: 4.5, unit_price: 78.46 },
@@ -67,6 +69,7 @@ const sampleOrders: WorkshopReportOrder[] = [
     diagnosis: 'BOBINA SOLENOIDE DANFOSS 110V QUEIMADA',
     created_at: '2026-08-05T18:00:00Z',
     customers: { name: 'Cliente A' },
+    user_profiles: { full_name: 'Carlos Pereira' },
     service_order_parts: [
       { product_id: 'p_bobina', part_name: 'BOBINA SOLENOIDE DANFOSS 220V', quantity: 1, unit_price: 270.25 },
       { product_id: null, part_name: 'Mão de obra', quantity: 1, unit_price: 200 },
@@ -86,6 +89,7 @@ const sampleOrders: WorkshopReportOrder[] = [
     diagnosis: 'COMPRESSOR QUEIMADO',
     created_at: '2026-11-13T16:30:00Z',
     customers: { name: 'Cliente A' },
+    user_profiles: [{ full_name: '  João Silva  ' }],
     service_order_parts: [
       { product_id: 'p_comp', part_name: 'COMPRESSOR TECUMSEH AL4480 220V', quantity: 1, unit_price: 1300 },
       { product_id: 'p_gas', part_name: 'GAS REFRIGERANTE 134A', quantity: 4.5, unit_price: 78.46 },
@@ -107,6 +111,7 @@ const sampleOrders: WorkshopReportOrder[] = [
     diagnosis: 'EQUIPAMENTO OK, TESTE OPERACIONAL',
     created_at: '2026-11-20T12:00:00Z',
     customers: { name: 'Cliente B' },
+    user_profiles: null,
     service_order_parts: [],
   },
 ];
@@ -126,6 +131,11 @@ test('parseMultiOsQuery handles pasted OS lists with # and separators while pres
   assert.equal(matchesWorkshopOrderSearch(sampleOrders[1], '#0170 #0065'), true);
   assert.equal(matchesWorkshopOrderSearch(sampleOrders[3], '#0170 #0065'), false);
   assert.equal(matchesWorkshopOrderSearch(sampleOrders[0], 'compressor'), true);
+  assert.equal(matchesWorkshopOrderSearch(sampleOrders[0], 'joao'), true);
+  assert.equal(matchesWorkshopOrderSearch(sampleOrders[1], 'joao'), false);
+  assert.equal(getWorkshopOrderTechnicianName(sampleOrders[0]), 'João Silva');
+  assert.equal(getWorkshopOrderTechnicianName(sampleOrders[2]), 'João Silva');
+  assert.equal(getWorkshopOrderTechnicianName(sampleOrders[3]), '');
 });
 
 test('local date range filter works cleanly without UTC day-shift errors', () => {
@@ -180,9 +190,16 @@ test('generated XLSX workbook has exact 3 sheets, valid formulas, and round-trip
 
   const ws1 = parsed.Sheets['Relatório de OS'];
   assert.equal(ws1['A1'].v, 'OS');
-  assert.equal(ws1['L1'].v, 'Data de Criação');
-  assert.equal(ws1['I6'].f, 'SUM(I2:I5)');
-  assert.equal(ws1['K2'].f, 'I2+J2');
+  assert.equal(ws1['C1'].v, 'Técnico Responsável');
+  assert.equal(ws1['C2'].v, 'João Silva');
+  assert.equal(ws1['C3'].v, 'Carlos Pereira');
+  assert.equal(ws1['C5'].v, 'Não atribuído');
+  assert.equal(ws1['M1'].v, 'Data de Criação');
+  assert.equal(ws1['J6'].f, 'SUM(J2:J5)');
+  assert.equal(ws1['K6'].f, 'SUM(K2:K5)');
+  assert.equal(ws1['L6'].f, 'SUM(L2:L5)');
+  assert.equal(ws1['L2'].f, 'J2+K2');
+  assert.equal(ws1['!autofilter']?.ref, 'A1:M5');
 
   const ws2 = parsed.Sheets['Consolidado de Materiais'];
   assert.equal(ws2['B1'].v, 'Componente / Material');
